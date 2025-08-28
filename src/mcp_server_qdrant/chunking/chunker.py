@@ -292,6 +292,18 @@ class DocumentChunker:
         
         # Clean up the content
         content = content.strip()
+        content_length = len(content)
+        content_tokens = self._count_tokens(content)
+        
+        logger.debug(f"Starting document chunking - Length: {content_length} chars, "
+                    f"Tokens: {content_tokens}, Max tokens per chunk: {self.max_tokens}")
+        
+        # Log chunking decision
+        if content_tokens <= self.max_tokens:
+            logger.debug("Document fits in single chunk, no chunking needed")
+        else:
+            logger.debug(f"Document exceeds max tokens ({content_tokens} > {self.max_tokens}), "
+                        f"will chunk with {self.overlap_tokens} token overlap")
         
         try:
             # Perform hybrid chunking
@@ -301,6 +313,8 @@ class DocumentChunker:
                 logger.warning("Hybrid chunking produced no chunks")
                 return []
             
+            logger.debug(f"Hybrid chunking produced {len(chunk_texts)} chunks")
+            
             # Create DocumentChunk objects
             document_chunks = []
             total_chunks = len(chunk_texts)
@@ -309,6 +323,9 @@ class DocumentChunker:
                 if not chunk_text.strip():
                     logger.warning(f"Empty chunk at index {i}, skipping")
                     continue
+                
+                chunk_tokens = self._count_tokens(chunk_text)
+                logger.debug(f"Chunk {i+1}/{total_chunks}: {len(chunk_text)} chars, {chunk_tokens} tokens")
                 
                 # Calculate overlap information
                 overlap_start = self.overlap_tokens if i > 0 else 0
@@ -331,7 +348,8 @@ class DocumentChunker:
                     # Continue with other chunks rather than failing completely
                     continue
             
-            logger.debug(f"Successfully created {len(document_chunks)} chunks from document")
+            logger.debug(f"Successfully created {len(document_chunks)} chunks from document "
+                        f"(source: {source_document_id[:8]}...)")
             return document_chunks
             
         except Exception as e:
@@ -352,14 +370,18 @@ class DocumentChunker:
         sentences = self._sentence_splitter(text)
         
         if not sentences:
+            logger.debug("No sentences found after splitting")
             return []
+        
+        logger.debug(f"Split text into {len(sentences)} sentences")
         
         # Step 2: Combine sentences into chunks with size limits and overlap
         chunks = []
         current_chunk_sentences = []
         current_token_count = 0
+        long_sentences_split = 0
         
-        for sentence in sentences:
+        for i, sentence in enumerate(sentences):
             sentence = sentence.strip()
             if not sentence:
                 continue
@@ -368,27 +390,39 @@ class DocumentChunker:
             
             # If this single sentence exceeds max_tokens, split it further
             if sentence_tokens > self.max_tokens:
+                logger.debug(f"Sentence {i+1} exceeds max tokens ({sentence_tokens} > {self.max_tokens}), "
+                           f"splitting further")
+                
                 # Finalize current chunk if it has content
                 if current_chunk_sentences:
-                    chunks.append(' '.join(current_chunk_sentences))
+                    chunk_text = ' '.join(current_chunk_sentences)
+                    chunks.append(chunk_text)
+                    logger.debug(f"Finalized chunk {len(chunks)} with {self._count_tokens(chunk_text)} tokens")
                     current_chunk_sentences = []
                     current_token_count = 0
                 
                 # Split the long sentence using fixed chunking
                 sentence_chunks = self._split_long_sentence(sentence)
                 chunks.extend(sentence_chunks)
+                long_sentences_split += 1
+                logger.debug(f"Split long sentence into {len(sentence_chunks)} sub-chunks")
                 continue
             
             # If adding this sentence would exceed the limit, finalize current chunk
             if current_token_count + sentence_tokens > self.max_tokens and current_chunk_sentences:
-                chunks.append(' '.join(current_chunk_sentences))
+                chunk_text = ' '.join(current_chunk_sentences)
+                chunks.append(chunk_text)
+                logger.debug(f"Finalized chunk {len(chunks)} with {self._count_tokens(chunk_text)} tokens "
+                           f"(would exceed limit with next sentence)")
                 
                 # Start new chunk with overlap from previous chunk
                 if self.overlap_tokens > 0 and chunks:
                     overlap_text = self._get_token_overlap(chunks[-1], self.overlap_tokens)
+                    overlap_actual_tokens = self._count_tokens(overlap_text)
+                    logger.debug(f"Adding {overlap_actual_tokens} token overlap to new chunk")
                     # Don't re-split overlap text into sentences to avoid complexity
                     current_chunk_sentences = [overlap_text, sentence]
-                    current_token_count = self._count_tokens(overlap_text) + sentence_tokens
+                    current_token_count = overlap_actual_tokens + sentence_tokens
                 else:
                     current_chunk_sentences = [sentence]
                     current_token_count = sentence_tokens
@@ -399,8 +433,14 @@ class DocumentChunker:
         
         # Handle remaining content
         if current_chunk_sentences:
-            chunks.append(' '.join(current_chunk_sentences))
+            chunk_text = ' '.join(current_chunk_sentences)
+            chunks.append(chunk_text)
+            logger.debug(f"Finalized final chunk {len(chunks)} with {self._count_tokens(chunk_text)} tokens")
         
+        if long_sentences_split > 0:
+            logger.debug(f"Split {long_sentences_split} long sentences during chunking")
+        
+        logger.debug(f"Hybrid chunking complete: {len(chunks)} chunks created")
         return chunks
     
     def _split_long_sentence(self, sentence: str) -> List[str]:

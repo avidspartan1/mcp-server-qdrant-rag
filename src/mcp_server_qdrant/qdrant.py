@@ -162,6 +162,25 @@ class QdrantConnector:
             and self._should_chunk_document(entry.content)
         )
 
+        # Log chunking decision
+        content_length = len(entry.content)
+        if entry.is_chunk:
+            logger.debug(f"Storing pre-chunked entry (chunk {entry.chunk_index + 1}/{entry.total_chunks}) "
+                        f"in collection '{collection_name}' - {content_length} chars")
+        elif should_chunk:
+            logger.debug(f"Document will be chunked before storage in collection '{collection_name}' "
+                        f"- {content_length} chars")
+        else:
+            if not self._enable_chunking:
+                logger.debug(f"Storing single entry in collection '{collection_name}' "
+                            f"- {content_length} chars (chunking disabled)")
+            elif self._chunker is None:
+                logger.debug(f"Storing single entry in collection '{collection_name}' "
+                            f"- {content_length} chars (no chunker available)")
+            else:
+                logger.debug(f"Storing single entry in collection '{collection_name}' "
+                            f"- {content_length} chars (below chunk threshold)")
+
         if should_chunk:
             await self._store_chunked_document(entry, collection_name)
         else:
@@ -204,6 +223,8 @@ class QdrantConnector:
         # Generate a unique source document ID
         source_document_id = str(uuid.uuid4())
         
+        logger.debug(f"Starting chunked storage for document (source_id: {source_document_id[:8]}...)")
+        
         try:
             # Create chunks using the DocumentChunker
             document_chunks = await self._chunker.chunk_document(
@@ -218,6 +239,8 @@ class QdrantConnector:
                 await self._store_single_entry(entry, collection_name)
                 return
             
+            logger.debug(f"Chunking produced {len(document_chunks)} chunks, converting to entries")
+            
             # Convert DocumentChunk objects to Entry objects and store them
             chunk_entries = []
             for doc_chunk in document_chunks:
@@ -231,11 +254,16 @@ class QdrantConnector:
                 )
                 chunk_entries.append(chunk_entry)
             
-            # Store all chunks
-            for chunk_entry in chunk_entries:
-                await self._store_single_entry(chunk_entry, collection_name)
+            logger.debug(f"Storing {len(chunk_entries)} chunk entries to collection '{collection_name}'")
             
-            logger.info(f"Stored document as {len(chunk_entries)} chunks in collection '{collection_name}'")
+            # Store all chunks
+            for i, chunk_entry in enumerate(chunk_entries):
+                await self._store_single_entry(chunk_entry, collection_name)
+                logger.debug(f"Stored chunk {i+1}/{len(chunk_entries)} "
+                           f"({len(chunk_entry.content)} chars)")
+            
+            logger.info(f"Successfully stored document as {len(chunk_entries)} chunks in collection '{collection_name}' "
+                       f"(source_id: {source_document_id[:8]}...)")
             
         except Exception as e:
             logger.error(f"Chunking failed for document (length: {len(entry.content)}): {e}")
@@ -272,13 +300,19 @@ class QdrantConnector:
         :return: True if the document should be chunked, False otherwise
         """
         if not self._chunker:
+            logger.debug("No chunker available, document will not be chunked")
             return False
         
         # Use the chunker's token counting method to determine if chunking is needed
         token_count = self._chunker._count_tokens(content)
+        max_tokens = self._chunker.max_tokens
         
-        # Chunk if the document exceeds the maximum chunk size
-        return token_count > self._chunker.max_tokens
+        should_chunk = token_count > max_tokens
+        
+        logger.debug(f"Chunking decision: {token_count} tokens vs {max_tokens} max "
+                    f"-> {'CHUNK' if should_chunk else 'NO CHUNK'}")
+        
+        return should_chunk
 
     async def search(
         self,

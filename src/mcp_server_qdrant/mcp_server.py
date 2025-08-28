@@ -78,9 +78,63 @@ class QdrantMCPServer(FastMCP):
             chunk_strategy=self.embedding_provider_settings.chunk_strategy if self.embedding_provider_settings else "semantic",
         )
 
+        # Log startup configuration
+        self._log_startup_configuration()
+
         super().__init__(name=name, instructions=instructions, **settings)
 
         self.setup_tools()
+
+    def _log_startup_configuration(self) -> None:
+        """Log the active configuration at startup for debugging and transparency."""
+        logger.info("=== MCP Server Qdrant Configuration ===")
+        
+        # Log embedding provider configuration
+        if self.embedding_provider_settings:
+            logger.info(f"Embedding Provider: {self.embedding_provider_settings.provider_type.value}")
+            logger.info(f"Embedding Model: {self.embedding_provider_settings.model_name}")
+            
+            # Get model information if available
+            try:
+                model_info = self.embedding_provider.get_model_info()
+                logger.info(f"Vector Dimensions: {model_info.get('vector_size', 'unknown')}")
+                logger.info(f"Vector Name: {model_info.get('vector_name', 'unknown')}")
+                logger.info(f"Model Status: {model_info.get('status', 'unknown')}")
+            except Exception as e:
+                logger.warning(f"Could not retrieve model information: {e}")
+            
+            # Log chunking configuration
+            logger.info(f"Chunking Enabled: {self.embedding_provider_settings.enable_chunking}")
+            if self.embedding_provider_settings.enable_chunking:
+                logger.info(f"Max Chunk Size: {self.embedding_provider_settings.max_chunk_size} tokens")
+                logger.info(f"Chunk Overlap: {self.embedding_provider_settings.chunk_overlap} tokens")
+                logger.info(f"Chunk Strategy: {self.embedding_provider_settings.chunk_strategy}")
+                
+                # Calculate and log overlap percentage for context
+                overlap_percentage = (self.embedding_provider_settings.chunk_overlap / 
+                                    self.embedding_provider_settings.max_chunk_size) * 100
+                logger.info(f"Overlap Percentage: {overlap_percentage:.1f}%")
+        else:
+            logger.info("Embedding Provider: Custom provider (no settings available)")
+        
+        # Log Qdrant configuration
+        logger.info(f"Qdrant Location: {self.qdrant_settings.location or 'local'}")
+        if self.qdrant_settings.local_path:
+            logger.info(f"Qdrant Local Path: {self.qdrant_settings.local_path}")
+        logger.info(f"Collection Name: {self.qdrant_settings.collection_name or 'default'}")
+        logger.info(f"Search Limit: {self.qdrant_settings.search_limit}")
+        logger.info(f"Read Only Mode: {self.qdrant_settings.read_only}")
+        
+        # Log filterable fields configuration
+        filterable_fields = self.qdrant_settings.filterable_fields_dict_with_conditions()
+        if filterable_fields:
+            logger.info(f"Filterable Fields: {list(filterable_fields.keys())}")
+        else:
+            logger.info("Filterable Fields: None configured")
+        
+        logger.info(f"Allow Arbitrary Filter: {self.qdrant_settings.allow_arbitrary_filter}")
+        
+        logger.info("=== Configuration Complete ===")
 
     def format_entry(self, entry: Entry) -> str:
         """

@@ -77,7 +77,10 @@ class EmbeddingProviderSettings(BaseSettings):
     @classmethod
     def validate_max_chunk_size(cls, v: int) -> int:
         """Validate that max_chunk_size is within reasonable bounds."""
+        logger.debug(f"Validating max_chunk_size: {v}")
+        
         if v < 50:
+            logger.error(f"max_chunk_size validation failed: {v} is below minimum (50)")
             raise ConfigurationValidationError(
                 field_name="max_chunk_size",
                 invalid_value=v,
@@ -86,6 +89,7 @@ class EmbeddingProviderSettings(BaseSettings):
                 suggested_value=512
             )
         if v > 8192:
+            logger.error(f"max_chunk_size validation failed: {v} exceeds maximum (8192)")
             raise ConfigurationValidationError(
                 field_name="max_chunk_size",
                 invalid_value=v,
@@ -93,13 +97,18 @@ class EmbeddingProviderSettings(BaseSettings):
                 valid_options=None,
                 suggested_value=2048
             )
+        
+        logger.debug(f"max_chunk_size validation passed: {v}")
         return v
 
     @field_validator("chunk_overlap")
     @classmethod
     def validate_chunk_overlap(cls, v: int) -> int:
         """Validate that chunk_overlap is non-negative and reasonable."""
+        logger.debug(f"Validating chunk_overlap: {v}")
+        
         if v < 0:
+            logger.error(f"chunk_overlap validation failed: {v} is negative")
             raise ConfigurationValidationError(
                 field_name="chunk_overlap",
                 invalid_value=v,
@@ -108,6 +117,7 @@ class EmbeddingProviderSettings(BaseSettings):
                 suggested_value=50
             )
         if v > 1000:
+            logger.error(f"chunk_overlap validation failed: {v} exceeds maximum (1000)")
             raise ConfigurationValidationError(
                 field_name="chunk_overlap",
                 invalid_value=v,
@@ -115,14 +125,19 @@ class EmbeddingProviderSettings(BaseSettings):
                 valid_options=None,
                 suggested_value=100
             )
+        
+        logger.debug(f"chunk_overlap validation passed: {v}")
         return v
 
     @field_validator("chunk_strategy")
     @classmethod
     def validate_chunk_strategy(cls, v: str) -> str:
         """Validate that chunk_strategy is one of the supported strategies."""
+        logger.debug(f"Validating chunk_strategy: {v}")
+        
         allowed_strategies = {"semantic", "fixed", "sentence"}
         if v not in allowed_strategies:
+            logger.error(f"chunk_strategy validation failed: '{v}' not in {allowed_strategies}")
             raise ConfigurationValidationError(
                 field_name="chunk_strategy",
                 invalid_value=v,
@@ -130,13 +145,18 @@ class EmbeddingProviderSettings(BaseSettings):
                 valid_options=list(allowed_strategies),
                 suggested_value="semantic"
             )
+        
+        logger.debug(f"chunk_strategy validation passed: {v}")
         return v
 
     @model_validator(mode="after")
     def validate_chunk_overlap_vs_size(self) -> "EmbeddingProviderSettings":
         """Validate that chunk_overlap is not larger than max_chunk_size."""
+        logger.debug(f"Validating chunk_overlap ({self.chunk_overlap}) vs max_chunk_size ({self.max_chunk_size})")
+        
         if self.chunk_overlap >= self.max_chunk_size:
             suggested_overlap = max(10, self.max_chunk_size // 10)  # 10% of chunk size
+            logger.error(f"chunk_overlap validation failed: {self.chunk_overlap} >= {self.max_chunk_size}")
             raise ConfigurationValidationError(
                 field_name="chunk_overlap",
                 invalid_value=self.chunk_overlap,
@@ -144,6 +164,9 @@ class EmbeddingProviderSettings(BaseSettings):
                 valid_options=None,
                 suggested_value=suggested_overlap
             )
+        
+        overlap_percentage = (self.chunk_overlap / self.max_chunk_size) * 100
+        logger.debug(f"chunk_overlap validation passed: {overlap_percentage:.1f}% overlap ratio")
         return self
 
 

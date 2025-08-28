@@ -11,13 +11,13 @@ class TestFastEmbedProviderIntegration:
 
     async def test_initialization(self):
         """Test that the provider can be initialized with a valid model."""
-        provider = FastEmbedProvider("sentence-transformers/all-MiniLM-L6-v2")
-        assert provider.model_name == "sentence-transformers/all-MiniLM-L6-v2"
+        provider = FastEmbedProvider("nomic-ai/nomic-embed-text-v1.5-Q")
+        assert provider.model_name == "nomic-ai/nomic-embed-text-v1.5-Q"
         assert isinstance(provider.embedding_model, TextEmbedding)
 
     async def test_embed_documents(self):
         """Test that documents can be embedded."""
-        provider = FastEmbedProvider("sentence-transformers/all-MiniLM-L6-v2")
+        provider = FastEmbedProvider("nomic-ai/nomic-embed-text-v1.5-Q")
         documents = ["This is a test document.", "This is another test document."]
 
         embeddings = await provider.embed_documents(documents)
@@ -38,7 +38,7 @@ class TestFastEmbedProviderIntegration:
 
     async def test_embed_query(self):
         """Test that queries can be embedded."""
-        provider = FastEmbedProvider("sentence-transformers/all-MiniLM-L6-v2")
+        provider = FastEmbedProvider("nomic-ai/nomic-embed-text-v1.5-Q")
         query = "This is a test query."
 
         embedding = await provider.embed_query(query)
@@ -55,9 +55,19 @@ class TestFastEmbedProviderIntegration:
 
     async def test_get_vector_name(self):
         """Test that the vector name is generated correctly."""
-        provider = FastEmbedProvider("sentence-transformers/all-MiniLM-L6-v2")
+        provider = FastEmbedProvider("nomic-ai/nomic-embed-text-v1.5-Q")
         vector_name = provider.get_vector_name()
 
         # Check that the vector name follows the expected format
         assert vector_name.startswith("fast-")
-        assert "minilm" in vector_name.lower()
+        assert "nomic-embed-text-v1.5-q" in vector_name.lower()
+
+    async def test_invalid_model_validation(self):
+        """Test that invalid models raise appropriate errors."""
+        with pytest.raises(ValueError) as exc_info:
+            FastEmbedProvider("invalid-model-name")
+        
+        error_message = str(exc_info.value)
+        assert "Invalid embedding model 'invalid-model-name'" in error_message
+        assert "Model is not supported by FastEmbed" in error_message
+        assert "Available models:" in error_message

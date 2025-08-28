@@ -140,10 +140,16 @@ class QdrantConnector:
     async def _ensure_collection_exists(self, collection_name: str):
         """
         Ensure that the collection exists, creating it if necessary.
+        Validates vector dimensions for existing collections.
         :param collection_name: The name of the collection to ensure exists.
+        :raises ValueError: If existing collection has incompatible vector dimensions.
         """
         collection_exists = await self._client.collection_exists(collection_name)
-        if not collection_exists:
+        
+        if collection_exists:
+            # Validate that existing collection has compatible vector dimensions
+            await self._validate_collection_dimensions(collection_name)
+        else:
             # Create the collection with the appropriate vector size
             vector_size = self._embedding_provider.get_vector_size()
 
@@ -160,7 +166,6 @@ class QdrantConnector:
             )
 
             # Create payload indexes if configured
-
             if self._field_indexes:
                 for field_name, field_type in self._field_indexes.items():
                     await self._client.create_payload_index(
@@ -168,3 +173,54 @@ class QdrantConnector:
                         field_name=field_name,
                         field_schema=field_type,
                     )
+
+    async def _validate_collection_dimensions(self, collection_name: str):
+        """
+        Validate that the existing collection has compatible vector dimensions.
+        :param collection_name: The name of the collection to validate.
+        :raises ValueError: If collection has incompatible vector dimensions.
+        """
+        try:
+            collection_info = await self._client.get_collection(collection_name)
+            expected_vector_size = self._embedding_provider.get_vector_size()
+            expected_vector_name = self._embedding_provider.get_vector_name()
+            
+            # Check if the expected vector name exists in the collection
+            if expected_vector_name not in collection_info.config.params.vectors:
+                available_vectors = list(collection_info.config.params.vectors.keys())
+                raise ValueError(
+                    f"Collection '{collection_name}' does not have the expected vector '{expected_vector_name}'. "
+                    f"Available vectors: {available_vectors}. "
+                    f"This usually indicates a change in embedding model. "
+                    f"Consider using a different collection name or recreating the collection."
+                )
+            
+            # Check vector dimensions
+            actual_vector_size = collection_info.config.params.vectors[expected_vector_name].size
+            if actual_vector_size != expected_vector_size:
+                current_model = getattr(self._embedding_provider, 'model_name', 'unknown')
+                raise ValueError(
+                    f"Vector dimension mismatch for collection '{collection_name}'. "
+                    f"Expected {expected_vector_size} dimensions (model: {current_model}), "
+                    f"but collection has {actual_vector_size} dimensions. "
+                    f"This usually indicates a change in embedding model. "
+                    f"Consider using a different collection name or recreating the collection."
+                )
+                
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise  # Re-raise our custom validation errors
+            else:
+                # Log other errors but don't fail - collection might be valid
+                logger.warning(f"Could not validate collection dimensions for '{collection_name}': {e}")
+
+    def get_embedding_model_info(self) -> dict[str, Any]:
+        """
+        Get information about the current embedding model.
+        :return: Dictionary containing model information.
+        """
+        return {
+            "model_name": getattr(self._embedding_provider, 'model_name', 'unknown'),
+            "vector_size": self._embedding_provider.get_vector_size(),
+            "vector_name": self._embedding_provider.get_vector_name(),
+        }

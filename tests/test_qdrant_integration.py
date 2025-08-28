@@ -236,3 +236,42 @@ async def test_nonexistent_collection_search(qdrant_connector):
 
     # Verify results
     assert len(results) == 0
+
+
+@pytest.mark.asyncio
+async def test_dynamic_dimension_handling_integration(qdrant_connector):
+    """Test that dynamic dimension handling works in integration scenarios."""
+    # Get embedding model info
+    model_info = qdrant_connector.get_embedding_model_info()
+    
+    # Verify model info structure
+    assert "model_name" in model_info
+    assert "vector_size" in model_info
+    assert "vector_name" in model_info
+    assert isinstance(model_info["vector_size"], int)
+    assert model_info["vector_size"] > 0
+    
+    # Store an entry to create collection with dynamic dimensions
+    test_entry = Entry(
+        content="Test content for dynamic dimension integration",
+        metadata={"test": "dynamic_dimensions"}
+    )
+    await qdrant_connector.store(test_entry)
+    
+    # Verify collection was created with correct dimensions
+    collection_info = await qdrant_connector._client.get_collection(
+        qdrant_connector._default_collection_name
+    )
+    
+    expected_vector_name = model_info["vector_name"]
+    expected_vector_size = model_info["vector_size"]
+    
+    assert expected_vector_name in collection_info.config.params.vectors
+    actual_vector_size = collection_info.config.params.vectors[expected_vector_name].size
+    assert actual_vector_size == expected_vector_size
+    
+    # Verify search still works correctly
+    results = await qdrant_connector.search("dynamic dimension")
+    assert len(results) == 1
+    assert results[0].content == test_entry.content
+    assert results[0].metadata == test_entry.metadata

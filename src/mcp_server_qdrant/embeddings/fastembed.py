@@ -14,7 +14,22 @@ class FastEmbedProvider(EmbeddingProvider):
 
     def __init__(self, model_name: str):
         self.model_name = model_name
+        self._validate_model(model_name)
         self.embedding_model = TextEmbedding(model_name)
+    
+    def _validate_model(self, model_name: str) -> None:
+        """Validate that the specified model is available in FastEmbed."""
+        try:
+            # Try to get model description to validate model exists
+            TextEmbedding._get_model_description(model_name)
+        except Exception as e:
+            available_models = [model['model'] for model in TextEmbedding.list_supported_models()]
+            raise ValueError(
+                f"Invalid embedding model '{model_name}'. "
+                f"Model is not supported by FastEmbed. "
+                f"Available models: {', '.join(available_models[:10])}..."
+                f" (showing first 10 of {len(available_models)} available models)"
+            ) from e
 
     async def embed_documents(self, documents: list[str]) -> list[list[float]]:
         """Embed a list of documents into vectors."""
@@ -48,3 +63,15 @@ class FastEmbedProvider(EmbeddingProvider):
             self.embedding_model._get_model_description(self.model_name)
         )
         return model_description.dim
+
+    def get_model_info(self) -> dict[str, any]:
+        """Get detailed information about the current model."""
+        model_description: DenseModelDescription = (
+            self.embedding_model._get_model_description(self.model_name)
+        )
+        return {
+            "model_name": self.model_name,
+            "vector_size": model_description.dim,
+            "vector_name": self.get_vector_name(),
+            "description": getattr(model_description, 'description', 'No description available'),
+        }

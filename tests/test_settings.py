@@ -69,7 +69,7 @@ class TestEmbeddingProviderSettings:
         """Test default values are set correctly."""
         settings = EmbeddingProviderSettings()
         assert settings.provider_type == EmbeddingProviderType.FASTEMBED
-        assert settings.model_name == "sentence-transformers/all-MiniLM-L6-v2"
+        assert settings.model_name == "nomic-ai/nomic-embed-text-v1.5-Q"
 
     def test_custom_values(self, monkeypatch):
         """Test loading custom values from environment variables."""

@@ -8,6 +8,7 @@ from mcp_server_qdrant.settings import (
     QdrantSettings,
     ToolSettings,
 )
+from mcp_server_qdrant.common.exceptions import ConfigurationValidationError
 
 
 class TestQdrantSettings:
@@ -101,14 +102,16 @@ class TestEmbeddingProviderSettings:
         # Test minimum boundary
         monkeypatch.setenv("MAX_CHUNK_SIZE", "49")
         monkeypatch.setenv("CHUNK_OVERLAP", "25")  # Set valid overlap
-        with pytest.raises(ValueError, match="max_chunk_size must be at least 50"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "max_chunk_size"
         
         # Test maximum boundary
         monkeypatch.setenv("MAX_CHUNK_SIZE", "8193")
         monkeypatch.setenv("CHUNK_OVERLAP", "25")  # Set valid overlap
-        with pytest.raises(ValueError, match="max_chunk_size must not exceed 8192"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "max_chunk_size"
         
         # Test valid values
         monkeypatch.setenv("MAX_CHUNK_SIZE", "50")
@@ -126,14 +129,16 @@ class TestEmbeddingProviderSettings:
         # Test negative value
         monkeypatch.setenv("CHUNK_OVERLAP", "-1")
         monkeypatch.setenv("MAX_CHUNK_SIZE", "512")  # Set valid chunk size
-        with pytest.raises(ValueError, match="chunk_overlap must be non-negative"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "chunk_overlap"
         
         # Test maximum boundary
         monkeypatch.setenv("CHUNK_OVERLAP", "1001")
         monkeypatch.setenv("MAX_CHUNK_SIZE", "2000")  # Set larger chunk size
-        with pytest.raises(ValueError, match="chunk_overlap must not exceed 1000"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "chunk_overlap"
         
         # Test valid values
         monkeypatch.setenv("CHUNK_OVERLAP", "0")
@@ -150,8 +155,9 @@ class TestEmbeddingProviderSettings:
         """Test validation of chunk_strategy field."""
         # Test invalid strategy
         monkeypatch.setenv("CHUNK_STRATEGY", "invalid")
-        with pytest.raises(ValueError, match="chunk_strategy must be one of"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "chunk_strategy"
         
         # Test valid strategies
         for strategy in ["semantic", "fixed", "sentence"]:
@@ -164,14 +170,16 @@ class TestEmbeddingProviderSettings:
         # Test overlap equal to size (should fail)
         monkeypatch.setenv("MAX_CHUNK_SIZE", "100")
         monkeypatch.setenv("CHUNK_OVERLAP", "100")
-        with pytest.raises(ValueError, match="chunk_overlap .* must be smaller than max_chunk_size"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "chunk_overlap"
         
         # Test overlap larger than size (should fail)
         monkeypatch.setenv("MAX_CHUNK_SIZE", "100")
         monkeypatch.setenv("CHUNK_OVERLAP", "150")
-        with pytest.raises(ValueError, match="chunk_overlap .* must be smaller than max_chunk_size"):
+        with pytest.raises(ConfigurationValidationError) as exc_info:
             EmbeddingProviderSettings()
+        assert exc_info.value.field_name == "chunk_overlap"
         
         # Test valid configuration
         monkeypatch.setenv("MAX_CHUNK_SIZE", "100")

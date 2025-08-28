@@ -5,6 +5,7 @@ from qdrant_client import models
 
 from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
 from mcp_server_qdrant.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant.common.exceptions import VectorDimensionMismatchError
 
 
 @pytest.mark.asyncio
@@ -140,7 +141,7 @@ class TestDynamicVectorDimensions:
         # Check if dimensions are actually different
         if provider.get_vector_size() != provider2.get_vector_size() or provider.get_vector_name() != provider2.get_vector_name():
             # Attempting to store with the second connector should raise a validation error
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(VectorDimensionMismatchError) as exc_info:
                 await connector2.store(Entry(content="Content with different model"))
             
             error_message = str(exc_info.value)
@@ -183,11 +184,12 @@ class TestDynamicVectorDimensions:
         connector2._client = connector._client
         
         # Attempting to store should raise a vector name mismatch error
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(VectorDimensionMismatchError) as exc_info:
             await connector2.store(Entry(content="Content with different vector name"))
         
         error_message = str(exc_info.value)
-        assert "does not have the expected vector" in error_message
+        assert "Vector dimension mismatch" in error_message
+        assert "different-vector-name" in error_message
         assert "different-vector-name" in error_message
         assert collection_name in error_message
 

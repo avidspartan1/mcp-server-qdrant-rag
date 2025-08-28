@@ -4,11 +4,17 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator, model_validator
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from mcp_server_qdrant.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant.settings import METADATA_PATH
 from mcp_server_qdrant.chunking.chunker import DocumentChunker
 from mcp_server_qdrant.chunking.models import DocumentChunk
+from mcp_server_qdrant.common.exceptions import (
+    VectorDimensionMismatchError,
+    ChunkingError,
+    CollectionAccessError
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +125,21 @@ class QdrantConnector:
         """
         Get the names of all collections in the Qdrant server.
         :return: A list of collection names.
+        :raises CollectionAccessError: If unable to retrieve collection names.
         """
-        response = await self._client.get_collections()
-        return [collection.name for collection in response.collections]
+        try:
+            response = await self._client.get_collections()
+            collection_names = [collection.name for collection in response.collections]
+            logger.debug(f"Retrieved {len(collection_names)} collections")
+            return collection_names
+        except Exception as e:
+            logger.error(f"Failed to get collection names: {e}")
+            raise CollectionAccessError(
+                collection_name="*",
+                operation="list",
+                original_error=e,
+                available_collections=[]
+            ) from e
 
     async def store(self, entry: Entry, *, collection_name: str | None = None):
         """
@@ -186,37 +204,65 @@ class QdrantConnector:
         # Generate a unique source document ID
         source_document_id = str(uuid.uuid4())
         
-        # Create chunks using the DocumentChunker
-        document_chunks = await self._chunker.chunk_document(
-            content=entry.content,
-            metadata=entry.metadata,
-            source_document_id=source_document_id
-        )
-        
-        if not document_chunks:
-            # If chunking failed or produced no chunks, store as single entry
-            logger.warning("Document chunking produced no chunks, storing as single entry")
-            await self._store_single_entry(entry, collection_name)
-            return
-        
-        # Convert DocumentChunk objects to Entry objects and store them
-        chunk_entries = []
-        for doc_chunk in document_chunks:
-            chunk_entry = Entry(
-                content=doc_chunk.content,
-                metadata=doc_chunk.metadata,
-                is_chunk=True,
-                source_document_id=doc_chunk.source_document_id,
-                chunk_index=doc_chunk.chunk_index,
-                total_chunks=doc_chunk.total_chunks
+        try:
+            # Create chunks using the DocumentChunker
+            document_chunks = await self._chunker.chunk_document(
+                content=entry.content,
+                metadata=entry.metadata,
+                source_document_id=source_document_id
             )
-            chunk_entries.append(chunk_entry)
-        
-        # Store all chunks
-        for chunk_entry in chunk_entries:
-            await self._store_single_entry(chunk_entry, collection_name)
-        
-        logger.info(f"Stored document as {len(chunk_entries)} chunks in collection '{collection_name}'")
+            
+            if not document_chunks:
+                # If chunking failed or produced no chunks, store as single entry
+                logger.warning("Document chunking produced no chunks, storing as single entry")
+                await self._store_single_entry(entry, collection_name)
+                return
+            
+            # Convert DocumentChunk objects to Entry objects and store them
+            chunk_entries = []
+            for doc_chunk in document_chunks:
+                chunk_entry = Entry(
+                    content=doc_chunk.content,
+                    metadata=doc_chunk.metadata,
+                    is_chunk=True,
+                    source_document_id=doc_chunk.source_document_id,
+                    chunk_index=doc_chunk.chunk_index,
+                    total_chunks=doc_chunk.total_chunks
+                )
+                chunk_entries.append(chunk_entry)
+            
+            # Store all chunks
+            for chunk_entry in chunk_entries:
+                await self._store_single_entry(chunk_entry, collection_name)
+            
+            logger.info(f"Stored document as {len(chunk_entries)} chunks in collection '{collection_name}'")
+            
+        except Exception as e:
+            logger.error(f"Chunking failed for document (length: {len(entry.content)}): {e}")
+            
+            # Create chunking error with fallback
+            chunking_config = {
+                "max_chunk_size": getattr(self._chunker, 'max_tokens', 'unknown'),
+                "chunk_overlap": getattr(self._chunker, 'overlap_tokens', 'unknown'),
+                "chunk_strategy": "hybrid"
+            }
+            
+            chunking_error = ChunkingError(
+                original_error=e,
+                document_length=len(entry.content),
+                chunking_config=chunking_config,
+                fallback_used=True
+            )
+            
+            logger.warning(f"Chunking error: {chunking_error.message}")
+            
+            # Fallback to storing as single entry
+            try:
+                await self._store_single_entry(entry, collection_name)
+                logger.info("Successfully stored document as single entry after chunking failure")
+            except Exception as fallback_error:
+                logger.error(f"Fallback storage also failed: {fallback_error}")
+                raise chunking_error from fallback_error
 
     def _should_chunk_document(self, content: str) -> bool:
         """
@@ -439,41 +485,47 @@ class QdrantConnector:
         """
         Validate that the existing collection has compatible vector dimensions.
         :param collection_name: The name of the collection to validate.
-        :raises ValueError: If collection has incompatible vector dimensions.
+        :raises VectorDimensionMismatchError: If collection has incompatible vector dimensions.
         """
         try:
             collection_info = await self._client.get_collection(collection_name)
             expected_vector_size = self._embedding_provider.get_vector_size()
             expected_vector_name = self._embedding_provider.get_vector_name()
+            current_model = getattr(self._embedding_provider, 'model_name', 'unknown')
+            
+            available_vectors = list(collection_info.config.params.vectors.keys())
             
             # Check if the expected vector name exists in the collection
-            if expected_vector_name not in collection_info.config.params.vectors:
-                available_vectors = list(collection_info.config.params.vectors.keys())
-                raise ValueError(
-                    f"Collection '{collection_name}' does not have the expected vector '{expected_vector_name}'. "
-                    f"Available vectors: {available_vectors}. "
-                    f"This usually indicates a change in embedding model. "
-                    f"Consider using a different collection name or recreating the collection."
+            if expected_vector_name not in available_vectors:
+                raise VectorDimensionMismatchError(
+                    collection_name=collection_name,
+                    expected_dimensions=expected_vector_size,
+                    actual_dimensions=0,  # No matching vector found
+                    model_name=current_model,
+                    vector_name=expected_vector_name,
+                    available_vectors=available_vectors
                 )
             
             # Check vector dimensions
             actual_vector_size = collection_info.config.params.vectors[expected_vector_name].size
             if actual_vector_size != expected_vector_size:
-                current_model = getattr(self._embedding_provider, 'model_name', 'unknown')
-                raise ValueError(
-                    f"Vector dimension mismatch for collection '{collection_name}'. "
-                    f"Expected {expected_vector_size} dimensions (model: {current_model}), "
-                    f"but collection has {actual_vector_size} dimensions. "
-                    f"This usually indicates a change in embedding model. "
-                    f"Consider using a different collection name or recreating the collection."
+                raise VectorDimensionMismatchError(
+                    collection_name=collection_name,
+                    expected_dimensions=expected_vector_size,
+                    actual_dimensions=actual_vector_size,
+                    model_name=current_model,
+                    vector_name=expected_vector_name,
+                    available_vectors=available_vectors
                 )
+            
+            logger.debug(f"Collection '{collection_name}' dimensions validated successfully")
                 
+        except VectorDimensionMismatchError:
+            raise  # Re-raise our custom validation errors
         except Exception as e:
-            if isinstance(e, ValueError):
-                raise  # Re-raise our custom validation errors
-            else:
-                # Log other errors but don't fail - collection might be valid
-                logger.warning(f"Could not validate collection dimensions for '{collection_name}': {e}")
+            # Log other errors but don't fail - collection might be valid
+            logger.warning(f"Could not validate collection dimensions for '{collection_name}': {e}")
+            # Don't raise here as the collection might still be usable
 
     def get_embedding_model_info(self) -> dict[str, Any]:
         """

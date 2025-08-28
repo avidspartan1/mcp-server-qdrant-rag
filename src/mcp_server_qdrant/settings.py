@@ -1,9 +1,13 @@
 from typing import Literal
+import logging
 
 from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings
 
 from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
+from mcp_server_qdrant.common.exceptions import ConfigurationValidationError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TOOL_STORE_DESCRIPTION = (
     "Keep the memory for later use, when you are asked to remember something."
@@ -74,9 +78,21 @@ class EmbeddingProviderSettings(BaseSettings):
     def validate_max_chunk_size(cls, v: int) -> int:
         """Validate that max_chunk_size is within reasonable bounds."""
         if v < 50:
-            raise ValueError("max_chunk_size must be at least 50 tokens/characters")
+            raise ConfigurationValidationError(
+                field_name="max_chunk_size",
+                invalid_value=v,
+                validation_error="max_chunk_size must be at least 50 tokens/characters",
+                valid_options=None,
+                suggested_value=512
+            )
         if v > 8192:
-            raise ValueError("max_chunk_size must not exceed 8192 tokens/characters")
+            raise ConfigurationValidationError(
+                field_name="max_chunk_size",
+                invalid_value=v,
+                validation_error="max_chunk_size must not exceed 8192 tokens/characters",
+                valid_options=None,
+                suggested_value=2048
+            )
         return v
 
     @field_validator("chunk_overlap")
@@ -84,9 +100,21 @@ class EmbeddingProviderSettings(BaseSettings):
     def validate_chunk_overlap(cls, v: int) -> int:
         """Validate that chunk_overlap is non-negative and reasonable."""
         if v < 0:
-            raise ValueError("chunk_overlap must be non-negative")
+            raise ConfigurationValidationError(
+                field_name="chunk_overlap",
+                invalid_value=v,
+                validation_error="chunk_overlap must be non-negative",
+                valid_options=None,
+                suggested_value=50
+            )
         if v > 1000:
-            raise ValueError("chunk_overlap must not exceed 1000 tokens/characters")
+            raise ConfigurationValidationError(
+                field_name="chunk_overlap",
+                invalid_value=v,
+                validation_error="chunk_overlap must not exceed 1000 tokens/characters",
+                valid_options=None,
+                suggested_value=100
+            )
         return v
 
     @field_validator("chunk_strategy")
@@ -95,8 +123,12 @@ class EmbeddingProviderSettings(BaseSettings):
         """Validate that chunk_strategy is one of the supported strategies."""
         allowed_strategies = {"semantic", "fixed", "sentence"}
         if v not in allowed_strategies:
-            raise ValueError(
-                f"chunk_strategy must be one of {allowed_strategies}, got '{v}'"
+            raise ConfigurationValidationError(
+                field_name="chunk_strategy",
+                invalid_value=v,
+                validation_error=f"chunk_strategy must be one of the supported strategies",
+                valid_options=list(allowed_strategies),
+                suggested_value="semantic"
             )
         return v
 
@@ -104,9 +136,13 @@ class EmbeddingProviderSettings(BaseSettings):
     def validate_chunk_overlap_vs_size(self) -> "EmbeddingProviderSettings":
         """Validate that chunk_overlap is not larger than max_chunk_size."""
         if self.chunk_overlap >= self.max_chunk_size:
-            raise ValueError(
-                f"chunk_overlap ({self.chunk_overlap}) must be smaller than "
-                f"max_chunk_size ({self.max_chunk_size})"
+            suggested_overlap = max(10, self.max_chunk_size // 10)  # 10% of chunk size
+            raise ConfigurationValidationError(
+                field_name="chunk_overlap",
+                invalid_value=self.chunk_overlap,
+                validation_error=f"chunk_overlap ({self.chunk_overlap}) must be smaller than max_chunk_size ({self.max_chunk_size})",
+                valid_options=None,
+                suggested_value=suggested_overlap
             )
         return self
 

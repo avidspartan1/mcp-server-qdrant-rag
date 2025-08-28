@@ -50,6 +50,7 @@ except ImportError:
     tiktoken = None
 
 from .models import DocumentChunk
+from ..common.exceptions import TokenizerError, SentenceSplitterError
 
 logger = logging.getLogger(__name__)
 
@@ -110,25 +111,74 @@ class DocumentChunker:
         """Initialize the sentence splitter based on availability and preference."""
         if splitter_name == "nltk":
             if not NLTK_AVAILABLE:
-                raise ValueError("NLTK is not available. Install with: pip install nltk")
-            return sent_tokenize
+                raise SentenceSplitterError(
+                    splitter_name="nltk",
+                    original_error=ImportError("NLTK is not available"),
+                    fallback_available=SYNTOK_AVAILABLE or True  # Simple fallback always available
+                )
+            try:
+                # Test NLTK functionality
+                sent_tokenize("Test sentence.")
+                logger.info("Using NLTK sentence splitter")
+                return sent_tokenize
+            except Exception as e:
+                logger.warning(f"NLTK sentence splitter failed, using fallback: {e}")
+                return self._get_fallback_sentence_splitter()
         elif splitter_name == "syntok":
             if not SYNTOK_AVAILABLE:
-                raise ValueError("syntok is not available. Install with: pip install syntok")
-            return self._syntok_sentence_split
+                raise SentenceSplitterError(
+                    splitter_name="syntok",
+                    original_error=ImportError("syntok is not available"),
+                    fallback_available=NLTK_AVAILABLE or True  # Simple fallback always available
+                )
+            try:
+                # Test syntok functionality
+                list(self._syntok_sentence_split("Test sentence."))
+                logger.info("Using syntok sentence splitter")
+                return self._syntok_sentence_split
+            except Exception as e:
+                logger.warning(f"syntok sentence splitter failed, using fallback: {e}")
+                return self._get_fallback_sentence_splitter()
         elif splitter_name is None:
             # Auto-select best available
             if NLTK_AVAILABLE:
-                logger.info("Using NLTK sentence splitter")
-                return sent_tokenize
-            elif SYNTOK_AVAILABLE:
-                logger.info("Using syntok sentence splitter")
-                return self._syntok_sentence_split
-            else:
-                logger.warning("No advanced sentence splitters available, using simple fallback")
-                return self._simple_sentence_split
+                try:
+                    sent_tokenize("Test sentence.")
+                    logger.info("Using NLTK sentence splitter")
+                    return sent_tokenize
+                except Exception as e:
+                    logger.warning(f"NLTK failed, trying syntok: {e}")
+            
+            if SYNTOK_AVAILABLE:
+                try:
+                    list(self._syntok_sentence_split("Test sentence."))
+                    logger.info("Using syntok sentence splitter")
+                    return self._syntok_sentence_split
+                except Exception as e:
+                    logger.warning(f"syntok failed, using simple fallback: {e}")
+            
+            logger.warning("No advanced sentence splitters available, using simple fallback")
+            return self._simple_sentence_split
         else:
             raise ValueError(f"Unknown sentence splitter: {splitter_name}")
+    
+    def _get_fallback_sentence_splitter(self) -> Callable[[str], List[str]]:
+        """Get the best available fallback sentence splitter."""
+        if NLTK_AVAILABLE:
+            try:
+                sent_tokenize("Test sentence.")
+                return sent_tokenize
+            except:
+                pass
+        
+        if SYNTOK_AVAILABLE:
+            try:
+                list(self._syntok_sentence_split("Test sentence."))
+                return self._syntok_sentence_split
+            except:
+                pass
+        
+        return self._simple_sentence_split
     
     def _init_tokenizer(self, tokenizer: Optional[Union[str, Callable[[str], List[str]]]]) -> Callable[[str], List[str]]:
         """Initialize the tokenizer based on type and availability."""
@@ -137,28 +187,43 @@ class DocumentChunker:
             return tokenizer
         elif tokenizer == "tiktoken":
             if not TIKTOKEN_AVAILABLE:
-                raise ValueError("tiktoken is not available. Install with: pip install tiktoken")
+                raise TokenizerError(
+                    tokenizer_name="tiktoken",
+                    original_error=ImportError("tiktoken is not available"),
+                    fallback_available=True
+                )
             try:
                 encoding = tiktoken.get_encoding(self.encoding_name)
+                # Test the encoding
+                test_tokens = encoding.encode("Test text")
+                encoding.decode(test_tokens)
+                
                 self._is_tiktoken = True
+                logger.info(f"Using tiktoken tokenizer with encoding: {self.encoding_name}")
                 return lambda text: encoding.encode(text)  # Returns token IDs, len() gives count
             except Exception as e:
                 logger.warning(f"Failed to initialize tiktoken with {self.encoding_name}: {e}")
                 self._is_tiktoken = False
+                logger.info("Falling back to whitespace tokenizer")
                 return self._whitespace_tokenizer
         elif tokenizer == "whitespace" or tokenizer is None:
             self._is_tiktoken = False
+            logger.info("Using whitespace tokenizer")
             return self._whitespace_tokenizer
         else:
             raise ValueError(f"Unknown tokenizer: {tokenizer}")
     
     def _syntok_sentence_split(self, text: str) -> List[str]:
         """Split text into sentences using syntok."""
-        sentences = []
-        for paragraph in syntok_segmenter.segment(text):
-            for sentence in paragraph:
-                sentences.append(str(sentence))
-        return sentences
+        try:
+            sentences = []
+            for paragraph in syntok_segmenter.segment(text):
+                for sentence in paragraph:
+                    sentences.append(str(sentence))
+            return sentences
+        except Exception as e:
+            logger.warning(f"syntok sentence splitting failed, using simple fallback: {e}")
+            return self._simple_sentence_split(text)
     
     def _simple_sentence_split(self, text: str) -> List[str]:
         """Simple sentence splitting fallback using basic punctuation."""
@@ -212,8 +277,13 @@ class DocumentChunker:
             
         Returns:
             List of DocumentChunk objects
+            
+        Raises:
+            ValueError: If content is empty or invalid
+            RuntimeError: If chunking fails due to internal errors
         """
         if not content or not content.strip():
+            logger.debug("Empty content provided for chunking")
             return []
         
         # Generate source document ID if not provided
@@ -223,31 +293,50 @@ class DocumentChunker:
         # Clean up the content
         content = content.strip()
         
-        # Perform hybrid chunking
-        chunk_texts = self._hybrid_chunk(content)
-        
-        # Create DocumentChunk objects
-        document_chunks = []
-        total_chunks = len(chunk_texts)
-        
-        for i, chunk_text in enumerate(chunk_texts):
-            # Calculate overlap information
-            overlap_start = self.overlap_tokens if i > 0 else 0
-            overlap_end = self.overlap_tokens if i < total_chunks - 1 else 0
+        try:
+            # Perform hybrid chunking
+            chunk_texts = self._hybrid_chunk(content)
             
-            document_chunk = DocumentChunk(
-                content=chunk_text,
-                metadata=metadata,
-                chunk_index=i,
-                source_document_id=source_document_id,
-                total_chunks=total_chunks,
-                overlap_start=overlap_start,
-                overlap_end=overlap_end,
-                chunk_strategy="hybrid"
-            )
-            document_chunks.append(document_chunk)
-        
-        return document_chunks
+            if not chunk_texts:
+                logger.warning("Hybrid chunking produced no chunks")
+                return []
+            
+            # Create DocumentChunk objects
+            document_chunks = []
+            total_chunks = len(chunk_texts)
+            
+            for i, chunk_text in enumerate(chunk_texts):
+                if not chunk_text.strip():
+                    logger.warning(f"Empty chunk at index {i}, skipping")
+                    continue
+                
+                # Calculate overlap information
+                overlap_start = self.overlap_tokens if i > 0 else 0
+                overlap_end = self.overlap_tokens if i < total_chunks - 1 else 0
+                
+                try:
+                    document_chunk = DocumentChunk(
+                        content=chunk_text,
+                        metadata=metadata,
+                        chunk_index=i,
+                        source_document_id=source_document_id,
+                        total_chunks=total_chunks,
+                        overlap_start=overlap_start,
+                        overlap_end=overlap_end,
+                        chunk_strategy="hybrid"
+                    )
+                    document_chunks.append(document_chunk)
+                except Exception as e:
+                    logger.error(f"Failed to create DocumentChunk at index {i}: {e}")
+                    # Continue with other chunks rather than failing completely
+                    continue
+            
+            logger.debug(f"Successfully created {len(document_chunks)} chunks from document")
+            return document_chunks
+            
+        except Exception as e:
+            logger.error(f"Document chunking failed: {e}")
+            raise RuntimeError(f"Failed to chunk document: {str(e)}") from e
     
     def _hybrid_chunk(self, text: str) -> List[str]:
         """

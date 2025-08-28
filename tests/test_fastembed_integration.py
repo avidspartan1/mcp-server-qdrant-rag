@@ -3,6 +3,7 @@ import pytest
 from fastembed import TextEmbedding
 
 from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant.common.exceptions import ModelValidationError
 
 
 @pytest.mark.asyncio
@@ -64,10 +65,10 @@ class TestFastEmbedProviderIntegration:
 
     async def test_invalid_model_validation(self):
         """Test that invalid models raise appropriate errors."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ModelValidationError) as exc_info:
             FastEmbedProvider("invalid-model-name")
         
         error_message = str(exc_info.value)
         assert "Invalid embedding model 'invalid-model-name'" in error_message
         assert "Model is not supported by FastEmbed" in error_message
-        assert "Available models:" in error_message
+        assert "Available models include:" in error_message

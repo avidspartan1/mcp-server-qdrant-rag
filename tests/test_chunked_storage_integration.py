@@ -101,8 +101,8 @@ class TestChunkedStorageIntegration:
         
         await qdrant_connector.store(entry)
         
-        # Search for content from the document
-        results = await qdrant_connector.search("sentence number")
+        # Search for content from the document (disable aggregation to see individual chunks)
+        results = await qdrant_connector.search("sentence number", aggregate_chunks=False)
         
         # Should have multiple chunks
         assert len(results) > 1
@@ -133,8 +133,8 @@ class TestChunkedStorageIntegration:
         
         await qdrant_connector.store(chunk_entry)
         
-        # Search for the chunk
-        results = await qdrant_connector.search("pre-chunked")
+        # Search for the chunk (disable aggregation to see individual chunk details)
+        results = await qdrant_connector.search("pre-chunked", aggregate_chunks=False)
         
         assert len(results) == 1
         assert results[0].content == chunk_entry.content
@@ -215,8 +215,8 @@ class TestChunkedStorageIntegration:
         
         await qdrant_connector.store(entry)
         
-        # Search to get all chunks
-        results = await qdrant_connector.search("sequential sentence")
+        # Search to get all chunks (disable aggregation to see individual chunks)
+        results = await qdrant_connector.search("sequential sentence", aggregate_chunks=False)
         
         # Verify chunk sequence integrity
         assert len(results) > 1

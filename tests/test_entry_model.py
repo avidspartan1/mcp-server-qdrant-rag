@@ -69,18 +69,20 @@ class TestEntryModel:
         assert "source_document_id is required when is_chunk is True" in str(exc_info.value)
 
     def test_chunk_missing_chunk_index(self):
-        """Test that chunk entry fails validation without chunk_index."""
-        with pytest.raises(ValidationError) as exc_info:
-            Entry(
-                content="Chunk content",
-                is_chunk=True,
-                source_document_id="doc-123",
-                total_chunks=3
-            )
-        assert "chunk_index is required when is_chunk is True" in str(exc_info.value)
+        """Test that chunk entry can be created without chunk_index (for aggregated chunks)."""
+        # This should now be valid for aggregated chunks
+        entry = Entry(
+            content="Chunk content",
+            is_chunk=True,
+            source_document_id="doc-123",
+            total_chunks=3
+        )
+        assert entry.is_chunk is True
+        assert entry.chunk_index is None
+        assert entry.total_chunks == 3
 
     def test_chunk_missing_total_chunks(self):
-        """Test that chunk entry fails validation without total_chunks."""
+        """Test that chunk entry fails validation without total_chunks when chunk_index is provided."""
         with pytest.raises(ValidationError) as exc_info:
             Entry(
                 content="Chunk content",
@@ -88,7 +90,7 @@ class TestEntryModel:
                 source_document_id="doc-123",
                 chunk_index=0
             )
-        assert "total_chunks is required when is_chunk is True" in str(exc_info.value)
+        assert "total_chunks is required when chunk_index is provided" in str(exc_info.value)
 
     def test_chunk_index_out_of_range(self):
         """Test that chunk_index must be less than total_chunks."""

@@ -84,13 +84,33 @@ class QdrantMCPServer(FastMCP):
 
     def format_entry(self, entry: Entry) -> str:
         """
+        Format an entry for display, with enhanced chunk information.
         Feel free to override this method in your subclass to customize the format of the entry.
         """
         entry_metadata = json.dumps(entry.metadata) if entry.metadata else ""
         
         # Add chunk information if this is a chunk
         if entry.is_chunk:
-            chunk_info = f" [Chunk {entry.chunk_index + 1}/{entry.total_chunks} from document {entry.source_document_id}]"
+            chunk_info_parts = []
+            
+            # Check if this is an aggregated chunk result
+            if hasattr(entry, '_chunk_count') and entry._chunk_count > 1:
+                chunk_info_parts.append(f"Aggregated from {entry._chunk_count} chunks")
+            elif entry.chunk_index is not None:
+                chunk_info_parts.append(f"Chunk {entry.chunk_index + 1}/{entry.total_chunks}")
+            else:
+                chunk_info_parts.append("Multiple chunks")
+            
+            # Add source document information
+            if entry.source_document_id and entry.source_document_id.strip():
+                # Truncate long document IDs for readability
+                doc_id = entry.source_document_id
+                if len(doc_id) > 12:
+                    doc_id = doc_id[:8] + "..."
+                chunk_info_parts.append(f"from document {doc_id}")
+            
+            chunk_info = f" [{', '.join(chunk_info_parts)}]"
+            
             return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata><chunk_info>{chunk_info}</chunk_info></entry>"
         else:
             return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata></entry>"

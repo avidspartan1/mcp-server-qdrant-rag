@@ -50,17 +50,19 @@ class Entry(BaseModel):
     def validate_chunk_metadata(self) -> 'Entry':
         """Validate chunk metadata consistency."""
         if self.is_chunk:
-            # If this is a chunk, all chunk-related fields should be provided
+            # If this is a chunk, source_document_id is required
             if self.source_document_id is None:
                 raise ValueError('source_document_id is required when is_chunk is True')
-            if self.chunk_index is None:
-                raise ValueError('chunk_index is required when is_chunk is True')
-            if self.total_chunks is None:
-                raise ValueError('total_chunks is required when is_chunk is True')
             
-            # Validate chunk_index is within valid range
-            if self.chunk_index >= self.total_chunks:
-                raise ValueError('chunk_index must be less than total_chunks')
+            # For individual chunks, both chunk_index and total_chunks should be provided
+            # For aggregated chunks, chunk_index can be None (indicating aggregation)
+            if self.chunk_index is not None and self.total_chunks is not None:
+                # Validate chunk_index is within valid range
+                if self.chunk_index >= self.total_chunks:
+                    raise ValueError('chunk_index must be less than total_chunks')
+            elif self.chunk_index is not None and self.total_chunks is None:
+                raise ValueError('total_chunks is required when chunk_index is provided')
+            # Note: chunk_index can be None for aggregated chunks, which is valid
         else:
             # If this is not a chunk, chunk-related fields should be None
             if any([self.source_document_id, self.chunk_index is not None, self.total_chunks is not None]):
@@ -239,16 +241,20 @@ class QdrantConnector:
         collection_name: str | None = None,
         limit: int = 10,
         query_filter: models.Filter | None = None,
+        aggregate_chunks: bool = True,
     ) -> list[Entry]:
         """
         Find points in the Qdrant collection. If there are no entries found, an empty list is returned.
+        Handles both chunked and non-chunked results with optional result aggregation.
+        
         :param query: The query to use for the search.
         :param collection_name: The name of the collection to search in, optional. If not provided,
                                 the default collection is used.
         :param limit: The maximum number of entries to return.
         :param query_filter: The filter to apply to the query, if any.
+        :param aggregate_chunks: Whether to aggregate chunks from the same source document.
 
-        :return: A list of entries found.
+        :return: A list of entries found, potentially aggregated by source document.
         """
         collection_name = collection_name or self._default_collection_name
         collection_exists = await self._client.collection_exists(collection_name)
@@ -262,17 +268,20 @@ class QdrantConnector:
         query_vector = await self._embedding_provider.embed_query(query)
         vector_name = self._embedding_provider.get_vector_name()
 
+        # Use a higher limit for raw search to account for potential aggregation
+        raw_limit = limit * 3 if aggregate_chunks else limit
+
         # Search in Qdrant
         search_results = await self._client.query_points(
             collection_name=collection_name,
             query=query_vector,
             using=vector_name,
-            limit=limit,
+            limit=raw_limit,
             query_filter=query_filter,
         )
 
         # Convert search results to Entry objects, handling both chunked and non-chunked content
-        entries = []
+        raw_entries = []
         for result in search_results.points:
             payload = result.payload
             
@@ -290,9 +299,104 @@ class QdrantConnector:
                 chunk_index=chunk_index,
                 total_chunks=total_chunks,
             )
-            entries.append(entry)
+            # Store the search score for potential use in aggregation
+            entry._search_score = result.score if hasattr(result, 'score') else 0.0
+            raw_entries.append(entry)
         
-        return entries
+        # Apply aggregation if requested and we have chunked results
+        if aggregate_chunks and any(entry.is_chunk for entry in raw_entries):
+            return self._aggregate_search_results(raw_entries, limit)
+        
+        return raw_entries[:limit]
+
+    def _aggregate_search_results(self, entries: list[Entry], limit: int) -> list[Entry]:
+        """
+        Aggregate search results to group chunks from the same source document.
+        
+        :param entries: List of Entry objects from search results
+        :param limit: Maximum number of results to return after aggregation
+        :return: Aggregated list of entries
+        """
+        # Separate chunked and non-chunked entries
+        non_chunked = [entry for entry in entries if not entry.is_chunk]
+        chunked = [entry for entry in entries if entry.is_chunk]
+        
+        # Group chunks by source document
+        chunks_by_document = {}
+        for chunk in chunked:
+            doc_id = chunk.source_document_id
+            if doc_id not in chunks_by_document:
+                chunks_by_document[doc_id] = []
+            chunks_by_document[doc_id].append(chunk)
+        
+        # Create aggregated entries for each source document
+        aggregated_chunks = []
+        for doc_id, doc_chunks in chunks_by_document.items():
+            # Sort chunks by index to maintain order
+            doc_chunks.sort(key=lambda x: x.chunk_index or 0)
+            
+            # Find the best scoring chunk to use as the representative
+            best_chunk = max(doc_chunks, key=lambda x: getattr(x, '_search_score', 0.0))
+            
+            # Create an aggregated entry with context from multiple chunks
+            aggregated_content = self._create_aggregated_content(doc_chunks)
+            
+            aggregated_entry = Entry(
+                content=aggregated_content,
+                metadata=best_chunk.metadata,
+                is_chunk=True,  # Mark as chunk to indicate this is from chunked content
+                source_document_id=doc_id,
+                chunk_index=None,  # No single chunk index for aggregated content
+                total_chunks=best_chunk.total_chunks,
+            )
+            # Preserve the best search score
+            aggregated_entry._search_score = getattr(best_chunk, '_search_score', 0.0)
+            aggregated_entry._chunk_count = len(doc_chunks)  # Track how many chunks were aggregated
+            aggregated_chunks.append(aggregated_entry)
+        
+        # Combine non-chunked and aggregated chunked results
+        all_results = non_chunked + aggregated_chunks
+        
+        # Sort by search score if available
+        all_results.sort(key=lambda x: getattr(x, '_search_score', 0.0), reverse=True)
+        
+        return all_results[:limit]
+
+    def _create_aggregated_content(self, chunks: list[Entry]) -> str:
+        """
+        Create aggregated content from multiple chunks of the same document.
+        
+        :param chunks: List of chunks from the same source document
+        :return: Aggregated content string
+        """
+        if len(chunks) == 1:
+            return chunks[0].content
+        
+        # Sort chunks by index
+        sorted_chunks = sorted(chunks, key=lambda x: x.chunk_index or 0)
+        
+        # If we have many chunks, limit to the most relevant ones
+        if len(sorted_chunks) > 3:
+            # Take the first chunk, the best scoring chunk, and the last chunk
+            best_chunk = max(sorted_chunks, key=lambda x: getattr(x, '_search_score', 0.0))
+            selected_chunks = [sorted_chunks[0]]
+            if best_chunk not in selected_chunks:
+                selected_chunks.append(best_chunk)
+            if sorted_chunks[-1] not in selected_chunks:
+                selected_chunks.append(sorted_chunks[-1])
+            # Re-sort by index
+            selected_chunks.sort(key=lambda x: x.chunk_index or 0)
+        else:
+            selected_chunks = sorted_chunks
+        
+        # Join chunks with clear separators
+        content_parts = []
+        for i, chunk in enumerate(selected_chunks):
+            if i > 0:
+                content_parts.append("...")  # Indicate potential gap
+            content_parts.append(chunk.content.strip())
+        
+        return " ".join(content_parts)
 
     async def _ensure_collection_exists(self, collection_name: str):
         """

@@ -45,9 +45,20 @@ The configuration of the server is done using environment variables:
 | `COLLECTION_NAME`        | Name of the default collection to use.                              | None                                                              |
 | `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
 | `EMBEDDING_PROVIDER`     | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                       |
-| `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `sentence-transformers/all-MiniLM-L6-v2`                          |
+| `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `nomic-ai/nomic-embed-text-v1.5-Q`                               |
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+
+### Document Chunking Configuration
+
+The server now supports intelligent document chunking for improved retrieval performance with large documents:
+
+| Name                     | Description                                                         | Default Value                                                     |
+|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
+| `ENABLE_CHUNKING`        | Enable automatic document chunking for large documents              | `true`                                                            |
+| `MAX_CHUNK_SIZE`         | Maximum size of document chunks in tokens/characters                | `512`                                                             |
+| `CHUNK_OVERLAP`          | Number of tokens/characters to overlap between chunks               | `50`                                                              |
+| `CHUNK_STRATEGY`         | Chunking strategy: `semantic`, `fixed`, or `sentence`               | `semantic`                                                        |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
 
@@ -79,7 +90,7 @@ When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no spe
 ```shell
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="my-collection" \
-EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
+EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
 uvx mcp-server-qdrant
 ```
 
@@ -154,7 +165,7 @@ To use this server with the Claude Desktop app, add the following configuration 
       "QDRANT_URL": "https://xyz-example.eu-central.aws.cloud.qdrant.io:6333",
       "QDRANT_API_KEY": "your_api_key",
       "COLLECTION_NAME": "your-collection-name",
-      "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
+      "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5-Q"
     }
   }
 }
@@ -170,7 +181,7 @@ For local Qdrant mode:
     "env": {
       "QDRANT_LOCAL_PATH": "/path/to/qdrant/database",
       "COLLECTION_NAME": "your-collection-name",
-      "EMBEDDING_MODEL": "sentence-transformers/all-MiniLM-L6-v2"
+      "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5-Q"
     }
   }
 }
@@ -178,8 +189,206 @@ For local Qdrant mode:
 
 This MCP server will automatically create a collection with the specified name if it doesn't exist.
 
-By default, the server will use the `sentence-transformers/all-MiniLM-L6-v2` embedding model to encode memories.
+By default, the server will use the `nomic-ai/nomic-embed-text-v1.5-Q` embedding model to encode memories.
 For the time being, only [FastEmbed](https://qdrant.github.io/fastembed/) models are supported.
+
+The server automatically detects vector dimensions based on the selected embedding model and supports intelligent document chunking for improved retrieval performance with large documents.
+
+## Configuration Examples
+
+### Basic Configuration with Chunking
+
+```bash
+# Basic setup with default chunking enabled
+QDRANT_URL="http://localhost:6333" \
+COLLECTION_NAME="my-documents" \
+EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
+ENABLE_CHUNKING=true \
+uvx mcp-server-qdrant
+```
+
+### Advanced Chunking Configuration
+
+```bash
+# Custom chunking settings for large documents
+QDRANT_URL="http://localhost:6333" \
+COLLECTION_NAME="large-docs" \
+EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
+ENABLE_CHUNKING=true \
+MAX_CHUNK_SIZE=1024 \
+CHUNK_OVERLAP=100 \
+CHUNK_STRATEGY=semantic \
+uvx mcp-server-qdrant
+```
+
+### Different Chunking Strategies
+
+#### Semantic Chunking (Recommended)
+```bash
+# Splits at sentence/paragraph boundaries for better context
+CHUNK_STRATEGY=semantic \
+MAX_CHUNK_SIZE=512 \
+CHUNK_OVERLAP=50
+```
+
+#### Fixed Chunking
+```bash
+# Splits at fixed character/token boundaries
+CHUNK_STRATEGY=fixed \
+MAX_CHUNK_SIZE=800 \
+CHUNK_OVERLAP=80
+```
+
+#### Sentence Chunking
+```bash
+# Splits at sentence boundaries only
+CHUNK_STRATEGY=sentence \
+MAX_CHUNK_SIZE=300 \
+CHUNK_OVERLAP=30
+```
+
+### Claude Desktop Configuration with Chunking
+
+```json
+{
+  "qdrant": {
+    "command": "uvx",
+    "args": ["mcp-server-qdrant"],
+    "env": {
+      "QDRANT_URL": "https://xyz-example.eu-central.aws.cloud.qdrant.io:6333",
+      "QDRANT_API_KEY": "your_api_key",
+      "COLLECTION_NAME": "your-collection-name",
+      "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5-Q",
+      "ENABLE_CHUNKING": "true",
+      "MAX_CHUNK_SIZE": "512",
+      "CHUNK_OVERLAP": "50",
+      "CHUNK_STRATEGY": "semantic"
+    }
+  }
+}
+```
+
+### Performance-Optimized Configuration
+
+```bash
+# Optimized for retrieval performance
+QDRANT_URL="http://localhost:6333" \
+COLLECTION_NAME="optimized-docs" \
+EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
+ENABLE_CHUNKING=true \
+MAX_CHUNK_SIZE=512 \
+CHUNK_OVERLAP=50 \
+CHUNK_STRATEGY=semantic \
+QDRANT_SEARCH_LIMIT=20 \
+uvx mcp-server-qdrant
+```
+
+## Migration Guide
+
+### Upgrading from Previous Versions
+
+When upgrading to the new version with chunking support, existing deployments will continue to work without changes. However, to take advantage of the new features:
+
+#### Automatic Migration
+- **Existing collections**: Continue to work with non-chunked documents
+- **New documents**: Automatically use chunking if enabled
+- **Search**: Seamlessly works across both chunked and non-chunked content
+- **Backward compatibility**: Fully maintained
+
+#### Configuration Migration
+1. **Update embedding model** (optional but recommended):
+   ```bash
+   # Old default
+   EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
+   
+   # New default (better quality)
+   EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q"
+   ```
+
+2. **Enable chunking** for new documents:
+   ```bash
+   ENABLE_CHUNKING=true
+   MAX_CHUNK_SIZE=512
+   CHUNK_OVERLAP=50
+   CHUNK_STRATEGY=semantic
+   ```
+
+#### Handling Vector Dimension Changes
+
+If you change embedding models, you may encounter dimension mismatches:
+
+```bash
+# Error example
+ConfigurationValidationError: Vector dimension mismatch: existing collection uses 384 dimensions, but model 'nomic-ai/nomic-embed-text-v1.5-Q' produces 768 dimensions
+```
+
+**Solutions:**
+1. **Use a new collection** (recommended):
+   ```bash
+   COLLECTION_NAME="my-collection-v2"
+   ```
+
+2. **Keep the old model** for existing collections:
+   ```bash
+   EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
+   ```
+
+3. **Recreate the collection** (data loss):
+   - Delete the existing collection in Qdrant
+   - Restart the server with the new model
+
+## Performance Recommendations
+
+### Chunk Size Selection
+
+Choose chunk sizes based on your use case:
+
+| Use Case | Recommended Size | Overlap | Strategy | Reasoning |
+|----------|------------------|---------|----------|-----------|
+| **General documents** | 512 tokens | 50 tokens | `semantic` | Balanced performance and context |
+| **Code snippets** | 300 tokens | 30 tokens | `sentence` | Preserve function/class boundaries |
+| **Long articles** | 1024 tokens | 100 tokens | `semantic` | Better context for large content |
+| **Short notes** | 256 tokens | 25 tokens | `fixed` | Minimal overhead |
+| **Technical docs** | 768 tokens | 75 tokens | `semantic` | Good for structured content |
+
+### Performance Optimization Tips
+
+1. **Chunk Size vs. Retrieval Quality**:
+   - **Smaller chunks** (256-512): Better precision, faster search
+   - **Larger chunks** (1024+): Better context, may reduce precision
+
+2. **Overlap Considerations**:
+   - **10-15% overlap**: Good balance for most use cases
+   - **Higher overlap** (20%+): Better for documents with complex references
+   - **Lower overlap** (5%): Faster processing, less storage
+
+3. **Strategy Selection**:
+   - **Semantic**: Best for natural language documents
+   - **Sentence**: Good for structured content (code, lists)
+   - **Fixed**: Fastest processing, predictable sizes
+
+4. **Memory and Storage**:
+   - Chunking increases the number of vectors stored
+   - Estimate: 1000-word document → 4-8 chunks (depending on settings)
+   - Monitor Qdrant collection size and adjust accordingly
+
+### Monitoring and Debugging
+
+Enable detailed logging to monitor chunking performance:
+
+```bash
+FASTMCP_LOG_LEVEL=DEBUG \
+QDRANT_URL="http://localhost:6333" \
+COLLECTION_NAME="debug-collection" \
+ENABLE_CHUNKING=true \
+uvx mcp-server-qdrant
+```
+
+This will log:
+- Chunking decisions and statistics
+- Vector dimension validation
+- Configuration validation results
+- Search performance metrics
 
 ## Support for other tools
 
@@ -254,7 +463,7 @@ existing codebase.
     claude mcp add code-search \
     -e QDRANT_URL="http://localhost:6333" \
     -e COLLECTION_NAME="code-repository" \
-    -e EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2" \
+    -e EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
     -e TOOL_STORE_DESCRIPTION="Store code snippets with descriptions. The 'information' parameter should contain a natural language description of what the code does, while the actual code should be included in the 'metadata' parameter as a 'code' property." \
     -e TOOL_FIND_DESCRIPTION="Search for relevant code snippets using natural language. The 'query' parameter should describe the functionality you're looking for." \
     -- uvx mcp-server-qdrant

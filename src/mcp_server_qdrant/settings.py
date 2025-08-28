@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings
 
 from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
@@ -35,7 +35,7 @@ class ToolSettings(BaseSettings):
 
 class EmbeddingProviderSettings(BaseSettings):
     """
-    Configuration for the embedding provider.
+    Configuration for the embedding provider and document chunking.
     """
 
     provider_type: EmbeddingProviderType = Field(
@@ -46,6 +46,69 @@ class EmbeddingProviderSettings(BaseSettings):
         default="nomic-ai/nomic-embed-text-v1.5-Q",
         validation_alias="EMBEDDING_MODEL",
     )
+    
+    # Chunking configuration
+    enable_chunking: bool = Field(
+        default=True,
+        validation_alias="ENABLE_CHUNKING",
+        description="Enable automatic document chunking for large documents",
+    )
+    max_chunk_size: int = Field(
+        default=512,
+        validation_alias="MAX_CHUNK_SIZE",
+        description="Maximum size of document chunks in tokens/characters",
+    )
+    chunk_overlap: int = Field(
+        default=50,
+        validation_alias="CHUNK_OVERLAP",
+        description="Number of tokens/characters to overlap between chunks",
+    )
+    chunk_strategy: str = Field(
+        default="semantic",
+        validation_alias="CHUNK_STRATEGY",
+        description="Chunking strategy: 'semantic', 'fixed', or 'sentence'",
+    )
+
+    @field_validator("max_chunk_size")
+    @classmethod
+    def validate_max_chunk_size(cls, v: int) -> int:
+        """Validate that max_chunk_size is within reasonable bounds."""
+        if v < 50:
+            raise ValueError("max_chunk_size must be at least 50 tokens/characters")
+        if v > 8192:
+            raise ValueError("max_chunk_size must not exceed 8192 tokens/characters")
+        return v
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def validate_chunk_overlap(cls, v: int) -> int:
+        """Validate that chunk_overlap is non-negative and reasonable."""
+        if v < 0:
+            raise ValueError("chunk_overlap must be non-negative")
+        if v > 1000:
+            raise ValueError("chunk_overlap must not exceed 1000 tokens/characters")
+        return v
+
+    @field_validator("chunk_strategy")
+    @classmethod
+    def validate_chunk_strategy(cls, v: str) -> str:
+        """Validate that chunk_strategy is one of the supported strategies."""
+        allowed_strategies = {"semantic", "fixed", "sentence"}
+        if v not in allowed_strategies:
+            raise ValueError(
+                f"chunk_strategy must be one of {allowed_strategies}, got '{v}'"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_chunk_overlap_vs_size(self) -> "EmbeddingProviderSettings":
+        """Validate that chunk_overlap is not larger than max_chunk_size."""
+        if self.chunk_overlap >= self.max_chunk_size:
+            raise ValueError(
+                f"chunk_overlap ({self.chunk_overlap}) must be smaller than "
+                f"max_chunk_size ({self.max_chunk_size})"
+            )
+        return self
 
 
 class FilterableField(BaseModel):

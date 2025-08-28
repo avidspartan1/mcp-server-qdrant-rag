@@ -72,6 +72,10 @@ class QdrantMCPServer(FastMCP):
             self.embedding_provider,
             qdrant_settings.local_path,
             make_indexes(qdrant_settings.filterable_fields_dict()),
+            enable_chunking=self.embedding_provider_settings.enable_chunking if self.embedding_provider_settings else True,
+            max_chunk_size=self.embedding_provider_settings.max_chunk_size if self.embedding_provider_settings else 512,
+            chunk_overlap=self.embedding_provider_settings.chunk_overlap if self.embedding_provider_settings else 50,
+            chunk_strategy=self.embedding_provider_settings.chunk_strategy if self.embedding_provider_settings else "semantic",
         )
 
         super().__init__(name=name, instructions=instructions, **settings)
@@ -83,7 +87,13 @@ class QdrantMCPServer(FastMCP):
         Feel free to override this method in your subclass to customize the format of the entry.
         """
         entry_metadata = json.dumps(entry.metadata) if entry.metadata else ""
-        return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata></entry>"
+        
+        # Add chunk information if this is a chunk
+        if entry.is_chunk:
+            chunk_info = f" [Chunk {entry.chunk_index + 1}/{entry.total_chunks} from document {entry.source_document_id}]"
+            return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata><chunk_info>{chunk_info}</chunk_info></entry>"
+        else:
+            return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata></entry>"
 
     def setup_tools(self):
         """

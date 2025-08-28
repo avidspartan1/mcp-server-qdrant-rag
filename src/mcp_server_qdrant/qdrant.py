@@ -292,6 +292,7 @@ class QdrantConnector:
         """
         Find points in the Qdrant collection. If there are no entries found, an empty list is returned.
         Handles both chunked and non-chunked results with optional result aggregation.
+        Provides seamless backward compatibility for mixed content types.
         
         :param query: The query to use for the search.
         :param collection_name: The name of the collection to search in, optional. If not provided,
@@ -306,6 +307,15 @@ class QdrantConnector:
         collection_exists = await self._client.collection_exists(collection_name)
         if not collection_exists:
             return []
+
+        # Validate collection compatibility before searching
+        try:
+            await self._validate_collection_dimensions(collection_name)
+        except VectorDimensionMismatchError as e:
+            logger.error(f"Collection compatibility issue during search: {e}")
+            # For backward compatibility, we could potentially continue with a warning
+            # but for now, we'll raise the error to maintain data integrity
+            raise
 
         # Embed the query
         # ToDo: instead of embedding text explicitly, use `models.Document`,
@@ -331,15 +341,18 @@ class QdrantConnector:
         for result in search_results.points:
             payload = result.payload
             
-            # Extract chunk-related fields from payload if present
+            # Handle backward compatibility: older entries might not have chunk fields
             is_chunk = payload.get("is_chunk", False)
             source_document_id = payload.get("source_document_id")
             chunk_index = payload.get("chunk_index")
             total_chunks = payload.get("total_chunks")
             
+            # Extract metadata with backward compatibility
+            metadata = payload.get("metadata") or payload.get(METADATA_PATH)
+            
             entry = Entry(
                 content=payload["document"],
-                metadata=payload.get("metadata"),
+                metadata=metadata,
                 is_chunk=is_chunk,
                 source_document_id=source_document_id,
                 chunk_index=chunk_index,
@@ -351,8 +364,11 @@ class QdrantConnector:
         
         # Apply aggregation if requested and we have chunked results
         if aggregate_chunks and any(entry.is_chunk for entry in raw_entries):
-            return self._aggregate_search_results(raw_entries, limit)
+            aggregated_results = self._aggregate_search_results(raw_entries, limit)
+            logger.debug(f"Search returned {len(raw_entries)} raw results, aggregated to {len(aggregated_results)} results")
+            return aggregated_results
         
+        logger.debug(f"Search returned {len(raw_entries)} results (no aggregation applied)")
         return raw_entries[:limit]
 
     def _aggregate_search_results(self, entries: list[Entry], limit: int) -> list[Entry]:
@@ -537,3 +553,119 @@ class QdrantConnector:
             "vector_size": self._embedding_provider.get_vector_size(),
             "vector_name": self._embedding_provider.get_vector_name(),
         }
+
+    async def analyze_collection_compatibility(self, collection_name: str | None = None) -> dict[str, Any]:
+        """
+        Analyze collection compatibility for backward compatibility assessment.
+        
+        :param collection_name: The name of the collection to analyze, optional. If not provided,
+                                the default collection is used.
+        :return: Dictionary containing compatibility analysis results.
+        """
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            return {
+                "error": "No collection name provided and no default collection configured",
+                "compatible": False
+            }
+        
+        try:
+            collection_exists = await self._client.collection_exists(collection_name)
+            if not collection_exists:
+                return {
+                    "collection_name": collection_name,
+                    "exists": False,
+                    "compatible": True,
+                    "message": "Collection does not exist - will be created with current configuration"
+                }
+            
+            collection_info = await self._client.get_collection(collection_name)
+            expected_vector_size = self._embedding_provider.get_vector_size()
+            expected_vector_name = self._embedding_provider.get_vector_name()
+            current_model = getattr(self._embedding_provider, 'model_name', 'unknown')
+            
+            available_vectors = list(collection_info.config.params.vectors.keys())
+            
+            # Check for chunked vs non-chunked content
+            points_count = collection_info.points_count
+            has_chunked_content = False
+            has_non_chunked_content = False
+            
+            if points_count > 0:
+                # Sample a few points to check for chunked content
+                sample_results = await self._client.scroll(
+                    collection_name=collection_name,
+                    limit=min(10, points_count),
+                    with_payload=True
+                )
+                
+                points, _ = sample_results  # scroll returns (points, next_page_offset)
+                for point in points:
+                    if point.payload and point.payload.get("is_chunk", False):
+                        has_chunked_content = True
+                    else:
+                        has_non_chunked_content = True
+            
+            # Vector compatibility analysis
+            vector_compatible = expected_vector_name in available_vectors
+            dimension_compatible = False
+            actual_vector_size = 0
+            
+            if vector_compatible:
+                actual_vector_size = collection_info.config.params.vectors[expected_vector_name].size
+                dimension_compatible = actual_vector_size == expected_vector_size
+            
+            compatibility_result = {
+                "collection_name": collection_name,
+                "exists": True,
+                "points_count": points_count,
+                "current_model": current_model,
+                "expected_vector_name": expected_vector_name,
+                "expected_dimensions": expected_vector_size,
+                "available_vectors": available_vectors,
+                "vector_compatible": vector_compatible,
+                "dimension_compatible": dimension_compatible,
+                "actual_dimensions": actual_vector_size,
+                "has_chunked_content": has_chunked_content,
+                "has_non_chunked_content": has_non_chunked_content,
+                "mixed_content": has_chunked_content and has_non_chunked_content,
+                "compatible": vector_compatible and dimension_compatible,
+                "chunking_enabled": self._enable_chunking,
+            }
+            
+            # Add recommendations
+            recommendations = []
+            if not vector_compatible:
+                recommendations.append(f"Vector name mismatch. Collection uses {available_vectors}, but model expects '{expected_vector_name}'")
+                recommendations.append("Consider using a different collection name or switching to a compatible model")
+            elif not dimension_compatible:
+                recommendations.append(f"Dimension mismatch. Collection has {actual_vector_size} dimensions, but model produces {expected_vector_size}")
+                recommendations.append("Consider using a different collection name or switching to a compatible model")
+            
+            if has_chunked_content and not self._enable_chunking:
+                recommendations.append("Collection contains chunked content but chunking is disabled")
+                recommendations.append("Enable chunking or use a different collection for consistency")
+            elif not has_chunked_content and self._enable_chunking and points_count > 0:
+                recommendations.append("Collection contains only non-chunked content but chunking is enabled")
+                recommendations.append("New large documents will be chunked while existing content remains unchanged")
+            
+            if compatibility_result["mixed_content"]:
+                recommendations.append("Collection contains both chunked and non-chunked content")
+                recommendations.append("Search results will include both types - this is normal and supported")
+            
+            compatibility_result["recommendations"] = recommendations
+            
+            return compatibility_result
+            
+        except Exception as e:
+            logger.error(f"Failed to analyze collection compatibility: {e}")
+            return {
+                "collection_name": collection_name,
+                "error": str(e),
+                "compatible": False,
+                "recommendations": [
+                    "Check Qdrant server connectivity",
+                    "Verify collection permissions",
+                    "Check if collection name is correct"
+                ]
+            }

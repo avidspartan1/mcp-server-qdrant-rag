@@ -227,3 +227,109 @@ class QdrantMCPServer(FastMCP):
                 name="qdrant-store",
                 description=self.tool_settings.tool_store_description,
             )
+
+        # Add compatibility analysis tool (read-only operation)
+        async def analyze_compatibility(
+            ctx: Context,
+            collection_name: Annotated[
+                str | None, 
+                Field(description="The collection to analyze for compatibility. If not provided, uses the default collection.")
+            ] = None,
+        ) -> str:
+            """
+            Analyze collection compatibility for backward compatibility assessment.
+            This tool helps identify potential issues when switching embedding models,
+            chunking configurations, or working with existing collections.
+            
+            :param ctx: The context for the request.
+            :param collection_name: The name of the collection to analyze, optional.
+            :return: A detailed compatibility analysis report.
+            """
+            await ctx.debug(f"Analyzing compatibility for collection: {collection_name or 'default'}")
+            
+            try:
+                compatibility = await self.qdrant_connector.analyze_collection_compatibility(collection_name)
+                
+                # Format the analysis results for human readability
+                report_lines = []
+                
+                if "error" in compatibility:
+                    report_lines.append(f"❌ Error: {compatibility['error']}")
+                    if "recommendations" in compatibility:
+                        report_lines.append("\n📋 Recommendations:")
+                        for rec in compatibility["recommendations"]:
+                            report_lines.append(f"  • {rec}")
+                    return "\n".join(report_lines)
+                
+                # Collection status
+                collection_name_display = compatibility.get("collection_name", "unknown")
+                if compatibility.get("exists", False):
+                    report_lines.append(f"📊 Collection '{collection_name_display}' exists")
+                    report_lines.append(f"   Points: {compatibility.get('points_count', 0)}")
+                else:
+                    report_lines.append(f"📊 Collection '{collection_name_display}' does not exist")
+                    report_lines.append(f"   {compatibility.get('message', 'Will be created with current configuration')}")
+                    return "\n".join(report_lines)
+                
+                # Compatibility status
+                if compatibility.get("compatible", False):
+                    report_lines.append("✅ Collection is compatible with current configuration")
+                else:
+                    report_lines.append("⚠️  Collection has compatibility issues")
+                
+                # Model and vector information
+                report_lines.append(f"\n🔧 Current Configuration:")
+                report_lines.append(f"   Model: {compatibility.get('current_model', 'unknown')}")
+                report_lines.append(f"   Expected vector: {compatibility.get('expected_vector_name', 'unknown')} ({compatibility.get('expected_dimensions', 0)} dimensions)")
+                report_lines.append(f"   Chunking enabled: {compatibility.get('chunking_enabled', False)}")
+                
+                # Collection vector information
+                available_vectors = compatibility.get("available_vectors", [])
+                if available_vectors:
+                    report_lines.append(f"\n📐 Collection Vectors:")
+                    for vector in available_vectors:
+                        if vector == compatibility.get("expected_vector_name"):
+                            status = "✅" if compatibility.get("dimension_compatible", False) else "❌"
+                            dims = compatibility.get("actual_dimensions", 0)
+                            report_lines.append(f"   {status} {vector} ({dims} dimensions)")
+                        else:
+                            report_lines.append(f"   ❓ {vector}")
+                
+                # Content analysis
+                has_chunked = compatibility.get("has_chunked_content", False)
+                has_non_chunked = compatibility.get("has_non_chunked_content", False)
+                
+                if has_chunked or has_non_chunked:
+                    report_lines.append(f"\n📄 Content Analysis:")
+                    if has_chunked:
+                        report_lines.append("   ✅ Contains chunked content")
+                    if has_non_chunked:
+                        report_lines.append("   ✅ Contains non-chunked content")
+                    if compatibility.get("mixed_content", False):
+                        report_lines.append("   🔄 Mixed content types detected")
+                
+                # Recommendations
+                recommendations = compatibility.get("recommendations", [])
+                if recommendations:
+                    report_lines.append(f"\n📋 Recommendations:")
+                    for rec in recommendations:
+                        report_lines.append(f"   • {rec}")
+                
+                return "\n".join(report_lines)
+                
+            except Exception as e:
+                await ctx.debug(f"Compatibility analysis failed: {e}")
+                return f"❌ Failed to analyze compatibility: {str(e)}"
+
+        # Apply collection name default if configured
+        analyze_compatibility_foo = analyze_compatibility
+        if self.qdrant_settings.collection_name:
+            analyze_compatibility_foo = make_partial_function(
+                analyze_compatibility_foo, {"collection_name": self.qdrant_settings.collection_name}
+            )
+
+        self.tool(
+            analyze_compatibility_foo,
+            name="qdrant-analyze-compatibility",
+            description="Analyze collection compatibility for backward compatibility assessment. Helps identify issues when switching models or configurations.",
+        )

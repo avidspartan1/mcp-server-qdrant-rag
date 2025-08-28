@@ -273,3 +273,43 @@ class SentenceSplitterError(MCPQdrantError):
         }
         
         super().__init__(message, details)
+
+
+class BackwardCompatibilityError(MCPQdrantError):
+    """Raised when backward compatibility issues are detected."""
+    
+    def __init__(
+        self,
+        collection_name: str,
+        compatibility_issues: List[str],
+        migration_required: bool = False,
+        auto_migration_available: bool = False
+    ):
+        self.collection_name = collection_name
+        self.compatibility_issues = compatibility_issues
+        self.migration_required = migration_required
+        self.auto_migration_available = auto_migration_available
+        
+        message = f"Backward compatibility issues detected for collection '{collection_name}': "
+        message += "; ".join(compatibility_issues)
+        
+        if migration_required:
+            if auto_migration_available:
+                message += " Automatic migration is available."
+            else:
+                message += " Manual migration is required."
+        
+        details = {
+            "collection_name": collection_name,
+            "compatibility_issues": compatibility_issues,
+            "migration_required": migration_required,
+            "auto_migration_available": auto_migration_available,
+            "migration_options": [
+                f"Create a new collection with a different name (e.g., '{collection_name}_v2')",
+                f"Backup and recreate collection '{collection_name}' with new configuration",
+                "Switch to a compatible embedding model",
+                "Use the compatibility analysis tool to get detailed recommendations"
+            ]
+        }
+        
+        super().__init__(message, details)

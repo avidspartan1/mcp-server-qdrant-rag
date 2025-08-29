@@ -1,4 +1,4 @@
-# Makefile for mcp-server-qdrant development
+# Makefile for mcp-server-qdrant-rag development
 
 .PHONY: help build up down logs test clean dev-setup
 
@@ -50,7 +50,7 @@ test: ## Run tests locally
 	uv run pytest
 
 test-docker: ## Run tests in Docker container
-	docker-compose exec mcp-server-qdrant uv run pytest
+	docker-compose exec mcp-server-qdrant-rag uv run pytest
 
 test-integration: ## Run integration tests
 	uv run pytest tests/test_*integration*.py -v
@@ -82,13 +82,13 @@ health: ## Check service health
 
 # Development utilities
 shell-mcp: ## Open shell in MCP server container
-	docker-compose exec mcp-server-qdrant /bin/bash
+	docker-compose exec mcp-server-qdrant-rag /bin/bash
 
 shell-qdrant: ## Open shell in Qdrant container
 	docker-compose exec qdrant /bin/bash
 
 inspect-mcp: ## Start MCP inspector for debugging
-	COLLECTION_NAME=dev-collection uv run fastmcp dev src/mcp_server_qdrant/server.py
+	COLLECTION_NAME=dev-collection uv run fastmcp dev src/mcp_server_qdrant_rag/server.py
 
 # Code quality
 lint: ## Run code linting

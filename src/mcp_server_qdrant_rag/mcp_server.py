@@ -6,13 +6,13 @@ from fastmcp import Context, FastMCP
 from pydantic import Field
 from qdrant_client import models
 
-from mcp_server_qdrant.common.filters import make_indexes
-from mcp_server_qdrant.common.func_tools import make_partial_function
-from mcp_server_qdrant.common.wrap_filters import wrap_filters
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
-from mcp_server_qdrant.embeddings.factory import create_embedding_provider
-from mcp_server_qdrant.qdrant import ArbitraryFilter, Entry, Metadata, QdrantConnector
-from mcp_server_qdrant.settings import (
+from mcp_server_qdrant_rag.common.filters import make_indexes
+from mcp_server_qdrant_rag.common.func_tools import make_partial_function
+from mcp_server_qdrant_rag.common.wrap_filters import wrap_filters
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.embeddings.factory import create_embedding_provider
+from mcp_server_qdrant_rag.qdrant import ArbitraryFilter, Entry, Metadata, QdrantConnector
+from mcp_server_qdrant_rag.settings import (
     EmbeddingProviderSettings,
     QdrantSettings,
     ToolSettings,
@@ -34,7 +34,7 @@ class QdrantMCPServer(FastMCP):
         qdrant_settings: QdrantSettings,
         embedding_provider_settings: Optional[EmbeddingProviderSettings] = None,
         embedding_provider: Optional[EmbeddingProvider] = None,
-        name: str = "mcp-server-qdrant",
+        name: str = "mcp-server-qdrant-rag",
         instructions: str | None = None,
         **settings: Any,
     ):

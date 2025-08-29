@@ -5,11 +5,11 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from io import StringIO
 
-from mcp_server_qdrant.settings import EmbeddingProviderSettings, QdrantSettings, ToolSettings
-from mcp_server_qdrant.mcp_server import QdrantMCPServer
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
-from mcp_server_qdrant.chunking.chunker import DocumentChunker
-from mcp_server_qdrant.common.exceptions import ConfigurationValidationError
+from mcp_server_qdrant_rag.settings import EmbeddingProviderSettings, QdrantSettings, ToolSettings
+from mcp_server_qdrant_rag.mcp_server import QdrantMCPServer
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.chunking.chunker import DocumentChunker
+from mcp_server_qdrant_rag.common.exceptions import ConfigurationValidationError
 
 
 class MockEmbeddingProvider(EmbeddingProvider):
@@ -50,7 +50,7 @@ class TestChunkingOperationLogging:
         self.log_handler.setLevel(logging.DEBUG)
         
         # Set up logger for chunker
-        self.logger = logging.getLogger("mcp_server_qdrant.chunking.chunker")
+        self.logger = logging.getLogger("mcp_server_qdrant_rag.chunking.chunker")
         self.logger.setLevel(logging.DEBUG)
         self.logger.addHandler(self.log_handler)
         
@@ -133,7 +133,7 @@ class TestConfigurationValidationLogging:
         self.log_handler.setLevel(logging.DEBUG)
         
         # Set up logger for settings
-        self.logger = logging.getLogger("mcp_server_qdrant.settings")
+        self.logger = logging.getLogger("mcp_server_qdrant_rag.settings")
         self.logger.setLevel(logging.DEBUG)
         self.logger.addHandler(self.log_handler)
         
@@ -238,7 +238,7 @@ class TestQdrantConnectorLogging:
         self.log_handler.setLevel(logging.DEBUG)
         
         # Set up logger for qdrant connector
-        self.logger = logging.getLogger("mcp_server_qdrant.qdrant")
+        self.logger = logging.getLogger("mcp_server_qdrant_rag.qdrant")
         self.logger.setLevel(logging.DEBUG)
         self.logger.addHandler(self.log_handler)
         
@@ -258,7 +258,7 @@ class TestQdrantConnectorLogging:
     @pytest.mark.asyncio
     async def test_chunking_decision_logging(self):
         """Test that chunking decisions are logged in QdrantConnector."""
-        from mcp_server_qdrant.qdrant import QdrantConnector, Entry
+        from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
         
         # Create a mock embedding provider
         mock_provider = MockEmbeddingProvider()
@@ -268,7 +268,7 @@ class TestQdrantConnectorLogging:
         mock_chunker.max_tokens = 100
         mock_chunker._count_tokens = Mock(return_value=50)  # Short document
         
-        with patch('mcp_server_qdrant.qdrant.AsyncQdrantClient'):
+        with patch('mcp_server_qdrant_rag.qdrant.AsyncQdrantClient'):
             connector = QdrantConnector(
                 qdrant_url=None,
                 qdrant_api_key=None,
@@ -300,7 +300,7 @@ class TestQdrantConnectorLogging:
         # Test with long document (chunking needed)
         mock_chunker._count_tokens = Mock(return_value=150)  # Long document
         
-        with patch('mcp_server_qdrant.qdrant.AsyncQdrantClient'):
+        with patch('mcp_server_qdrant_rag.qdrant.AsyncQdrantClient'):
             connector = QdrantConnector(
                 qdrant_url=None,
                 qdrant_api_key=None,
@@ -326,11 +326,11 @@ class TestQdrantConnectorLogging:
     @pytest.mark.asyncio
     async def test_chunking_disabled_logging(self):
         """Test logging when chunking is disabled."""
-        from mcp_server_qdrant.qdrant import QdrantConnector, Entry
+        from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
         
         mock_provider = MockEmbeddingProvider()
         
-        with patch('mcp_server_qdrant.qdrant.AsyncQdrantClient'):
+        with patch('mcp_server_qdrant_rag.qdrant.AsyncQdrantClient'):
             connector = QdrantConnector(
                 qdrant_url=None,
                 qdrant_api_key=None,

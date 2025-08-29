@@ -1,8 +1,8 @@
 """Unit tests for DocumentChunker service with hybrid chunking strategy."""
 
 import pytest
-from mcp_server_qdrant.chunking.chunker import DocumentChunker
-from mcp_server_qdrant.chunking.models import DocumentChunk
+from mcp_server_qdrant_rag.chunking.chunker import DocumentChunker
+from mcp_server_qdrant_rag.chunking.models import DocumentChunk
 
 
 class TestDocumentChunker:

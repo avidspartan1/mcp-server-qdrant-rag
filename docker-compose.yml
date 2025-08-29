@@ -17,9 +17,9 @@ services:
       retries: 3
       start_period: 10s
 
-  mcp-server-qdrant:
+  mcp-server-qdrant-rag:
     build: .
-    container_name: mcp-server-qdrant-dev
+    container_name: mcp-server-qdrant-rag-dev
     ports:
       - "8000:8000"
     environment:

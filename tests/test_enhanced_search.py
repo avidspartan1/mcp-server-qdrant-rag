@@ -5,8 +5,8 @@ import tempfile
 import shutil
 from unittest.mock import AsyncMock, MagicMock
 
-from mcp_server_qdrant.qdrant import QdrantConnector, Entry
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
 
 
 class MockEmbeddingProvider(EmbeddingProvider):

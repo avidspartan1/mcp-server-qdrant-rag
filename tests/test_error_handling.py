@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from pydantic import ValidationError
 
-from mcp_server_qdrant.common.exceptions import (
+from mcp_server_qdrant_rag.common.exceptions import (
     ModelValidationError,
     VectorDimensionMismatchError,
     ChunkingError,
@@ -13,10 +13,10 @@ from mcp_server_qdrant.common.exceptions import (
     TokenizerError,
     SentenceSplitterError
 )
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.qdrant import QdrantConnector, Entry
-from mcp_server_qdrant.chunking.chunker import DocumentChunker
-from mcp_server_qdrant.settings import EmbeddingProviderSettings
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant_rag.chunking.chunker import DocumentChunker
+from mcp_server_qdrant_rag.settings import EmbeddingProviderSettings
 
 
 class TestModelValidationError:
@@ -179,7 +179,7 @@ class TestConfigurationValidationError:
 class TestFastEmbedProviderErrorHandling:
     """Test FastEmbed provider error handling."""
     
-    @patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding')
+    @patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding')
     def test_invalid_model_validation(self, mock_text_embedding_class):
         """Test that invalid models raise ModelValidationError."""
         # Mock the class methods
@@ -196,7 +196,7 @@ class TestFastEmbedProviderErrorHandling:
         assert "model1" in error.available_models
         assert "model2" in error.available_models
     
-    @patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding')
+    @patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding')
     def test_model_suggestion(self, mock_text_embedding):
         """Test model suggestion logic."""
         mock_text_embedding._get_model_description.side_effect = Exception("Model not found")
@@ -224,7 +224,7 @@ class TestFastEmbedProviderErrorHandling:
     @pytest.mark.asyncio
     async def test_embed_documents_error_handling(self):
         """Test error handling in embed_documents."""
-        with patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
+        with patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
             # Setup successful validation
             mock_text_embedding._get_model_description.return_value = Mock()
             
@@ -242,7 +242,7 @@ class TestFastEmbedProviderErrorHandling:
     @pytest.mark.asyncio
     async def test_embed_query_empty_query(self):
         """Test error handling for empty query."""
-        with patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
+        with patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
             mock_text_embedding._get_model_description.return_value = Mock()
             
             provider = FastEmbedProvider("test-model")
@@ -255,7 +255,7 @@ class TestFastEmbedProviderErrorHandling:
     @pytest.mark.asyncio
     async def test_embed_query_error_handling(self):
         """Test error handling in embed_query."""
-        with patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
+        with patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding') as mock_text_embedding:
             mock_text_embedding._get_model_description.return_value = Mock()
             
             provider = FastEmbedProvider("test-model")
@@ -389,7 +389,7 @@ class TestDocumentChunkerErrorHandling:
         with pytest.raises(ValueError, match="Unknown tokenizer"):
             DocumentChunker(tokenizer="invalid")
     
-    @patch('mcp_server_qdrant.chunking.chunker.NLTK_AVAILABLE', False)
+    @patch('mcp_server_qdrant_rag.chunking.chunker.NLTK_AVAILABLE', False)
     def test_nltk_unavailable_error(self):
         """Test error when NLTK is requested but unavailable."""
         with pytest.raises(SentenceSplitterError) as exc_info:
@@ -399,7 +399,7 @@ class TestDocumentChunkerErrorHandling:
         assert error.splitter_name == "nltk"
         assert error.fallback_available is True
     
-    @patch('mcp_server_qdrant.chunking.chunker.SYNTOK_AVAILABLE', False)
+    @patch('mcp_server_qdrant_rag.chunking.chunker.SYNTOK_AVAILABLE', False)
     def test_syntok_unavailable_error(self):
         """Test error when syntok is requested but unavailable."""
         with pytest.raises(SentenceSplitterError) as exc_info:
@@ -409,7 +409,7 @@ class TestDocumentChunkerErrorHandling:
         assert error.splitter_name == "syntok"
         assert error.fallback_available is True  # NLTK or simple fallback available
     
-    @patch('mcp_server_qdrant.chunking.chunker.TIKTOKEN_AVAILABLE', False)
+    @patch('mcp_server_qdrant_rag.chunking.chunker.TIKTOKEN_AVAILABLE', False)
     def test_tiktoken_unavailable_error(self):
         """Test error when tiktoken is requested but unavailable."""
         with pytest.raises(TokenizerError) as exc_info:

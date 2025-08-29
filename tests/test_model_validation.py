@@ -4,8 +4,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastembed.common.model_description import DenseModelDescription
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.common.exceptions import ModelValidationError
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.common.exceptions import ModelValidationError
 
 
 class TestModelValidation:
@@ -27,7 +27,7 @@ class TestModelValidation:
         assert error.model_name == "invalid-model-name"
         assert "not found" in str(error) or "invalid" in str(error).lower()
 
-    @patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding.list_supported_models')
+    @patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding.list_supported_models')
     def test_model_validation_with_suggestions(self, mock_list_models):
         """Test that model validation provides helpful suggestions."""
         # Mock available models
@@ -171,7 +171,7 @@ class TestModelValidation:
         assert isinstance(size1, int) and size1 > 0
         assert isinstance(size2, int) and size2 > 0
 
-    @patch('mcp_server_qdrant.embeddings.fastembed.TextEmbedding.list_supported_models')
+    @patch('mcp_server_qdrant_rag.embeddings.fastembed.TextEmbedding.list_supported_models')
     def test_model_validation_error_without_available_models(self, mock_list_models):
         """Test model validation when available models list fails."""
         # Mock list_supported_models to raise an exception

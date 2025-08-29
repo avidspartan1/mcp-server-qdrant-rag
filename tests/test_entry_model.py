@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from mcp_server_qdrant.qdrant import Entry
+from mcp_server_qdrant_rag.qdrant import Entry
 
 
 class TestEntryModel:

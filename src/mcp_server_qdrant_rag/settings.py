@@ -4,8 +4,8 @@ import logging
 from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings
 
-from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
-from mcp_server_qdrant.common.exceptions import ConfigurationValidationError
+from mcp_server_qdrant_rag.embeddings.types import EmbeddingProviderType
+from mcp_server_qdrant_rag.common.exceptions import ConfigurationValidationError
 
 logger = logging.getLogger(__name__)
 

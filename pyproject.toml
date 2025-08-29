@@ -1,7 +1,7 @@
 [project]
-name = "mcp-server-qdrant"
+name = "mcp-server-qdrant-rag"
 version = "0.8.0"
-description = "MCP server for retrieving context from a Qdrant vector database"
+description = "Enhanced MCP server with intelligent document chunking for Qdrant vector database RAG"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -32,7 +32,7 @@ dev-dependencies = [
 ]
 
 [project.scripts]
-mcp-server-qdrant = "mcp_server_qdrant.main:main"
+mcp-server-qdrant-rag = "mcp_server_qdrant_rag.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,10 +7,10 @@ import uuid
 import os
 from unittest.mock import AsyncMock, patch
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.qdrant import QdrantConnector, Entry
-from mcp_server_qdrant.mcp_server import QdrantMCPServer
-from mcp_server_qdrant.settings import (
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant_rag.mcp_server import QdrantMCPServer
+from mcp_server_qdrant_rag.settings import (
     EmbeddingProviderSettings,
     QdrantSettings,
     ToolSettings,

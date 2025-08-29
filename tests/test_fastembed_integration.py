@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from fastembed import TextEmbedding
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.common.exceptions import ModelValidationError
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.common.exceptions import ModelValidationError
 
 
 @pytest.mark.asyncio

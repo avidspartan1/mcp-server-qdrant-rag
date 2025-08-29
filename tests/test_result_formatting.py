@@ -2,10 +2,10 @@
 
 import pytest
 import json
-from mcp_server_qdrant.mcp_server import QdrantMCPServer
-from mcp_server_qdrant.qdrant import Entry
-from mcp_server_qdrant.settings import ToolSettings, QdrantSettings, EmbeddingProviderSettings
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.mcp_server import QdrantMCPServer
+from mcp_server_qdrant_rag.qdrant import Entry
+from mcp_server_qdrant_rag.settings import ToolSettings, QdrantSettings, EmbeddingProviderSettings
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
 
 
 class MockEmbeddingProvider(EmbeddingProvider):

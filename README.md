@@ -1,18 +1,23 @@
-# mcp-server-qdrant: A Qdrant MCP server
+# mcp-server-qdrant-rag: Intelligent RAG with Qdrant Vector Database
 
-[![smithery badge](https://smithery.ai/badge/mcp-server-qdrant)](https://smithery.ai/protocol/mcp-server-qdrant)
+[![smithery badge](https://smithery.ai/badge/mcp-server-qdrant-rag)](https://smithery.ai/protocol/mcp-server-qdrant-rag)
 
 > The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) is an open protocol that enables
 > seamless integration between LLM applications and external data sources and tools. Whether you're building an
 > AI-powered IDE, enhancing a chat interface, or creating custom AI workflows, MCP provides a standardized way to
 > connect LLMs with the context they need.
 
-This repository is an example of how to create a MCP server for [Qdrant](https://qdrant.tech/), a vector search engine.
+This repository provides an enhanced MCP server for [Qdrant](https://qdrant.tech/) that specializes in intelligent document chunking and retrieval-augmented generation (RAG). It's a fork of the upstream `mcp-server-qdrant` project with advanced chunking capabilities for improved vector search performance.
 
 ## Overview
 
-An official Model Context Protocol server for keeping and retrieving memories in the Qdrant vector search engine.
-It acts as a semantic memory layer on top of the Qdrant database.
+A specialized Model Context Protocol server that provides intelligent document chunking and semantic memory capabilities using Qdrant vector database. This enhanced version automatically splits large documents into optimal chunks for better retrieval performance, while maintaining full backward compatibility with the original MCP server.
+
+**Key Enhancements over upstream:**
+- **Intelligent Document Chunking**: Automatic splitting of large documents using semantic, sentence, or fixed strategies
+- **Configurable Chunking Parameters**: Customizable chunk sizes, overlap, and splitting strategies
+- **Enhanced Retrieval Performance**: Optimized for better context retrieval from large documents
+- **Backward Compatibility**: Seamlessly works with existing collections and configurations
 
 ## Components
 
@@ -46,8 +51,8 @@ The configuration of the server is done using environment variables:
 | `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
 | `EMBEDDING_PROVIDER`     | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                       |
 | `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `nomic-ai/nomic-embed-text-v1.5-Q`                               |
-| `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
-| `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+| `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
+| `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
 
 ### Document Chunking Configuration
 
@@ -67,7 +72,7 @@ Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same t
 
 ### FastMCP Environment Variables
 
-Since `mcp-server-qdrant` is based on FastMCP, it also supports all the FastMCP environment variables. The most
+Since `mcp-server-qdrant-rag` is based on FastMCP, it also supports all the FastMCP environment variables. The most
 important ones are listed below:
 
 | Environment Variable                  | Description                                               | Default Value |
@@ -85,13 +90,13 @@ important ones are listed below:
 
 ### Using uvx
 
-When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no specific installation is needed to directly run *mcp-server-qdrant*.
+When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no specific installation is needed to directly run *mcp-server-qdrant-rag*.
 
 ```shell
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="my-collection" \
 EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
-uvx mcp-server-qdrant
+uvx mcp-server-qdrant-rag
 ```
 
 #### Transport Protocols
@@ -101,7 +106,7 @@ The server supports different transport protocols that can be specified using th
 ```shell
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="my-collection" \
-uvx mcp-server-qdrant --transport sse
+uvx mcp-server-qdrant-rag --transport sse
 ```
 
 Supported transport protocols:
@@ -119,7 +124,7 @@ port is 8000, however it can be changed using the `FASTMCP_PORT` environment var
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="my-collection" \
 FASTMCP_PORT=1234 \
-uvx mcp-server-qdrant --transport sse
+uvx mcp-server-qdrant-rag --transport sse
 ```
 
 ### Using Docker
@@ -128,7 +133,7 @@ A Dockerfile is available for building and running the MCP server:
 
 ```bash
 # Build the container
-docker build -t mcp-server-qdrant .
+docker build -t mcp-server-qdrant-rag .
 
 # Run the container
 docker run -p 8000:8000 \
@@ -136,7 +141,7 @@ docker run -p 8000:8000 \
   -e QDRANT_URL="http://your-qdrant-server:6333" \
   -e QDRANT_API_KEY="your-api-key" \
   -e COLLECTION_NAME="your-collection" \
-  mcp-server-qdrant
+  mcp-server-qdrant-rag
 ```
 
 > [!TIP]
@@ -145,10 +150,10 @@ docker run -p 8000:8000 \
 
 ### Installing via Smithery
 
-To install Qdrant MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/protocol/mcp-server-qdrant):
+To install Qdrant RAG MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/protocol/mcp-server-qdrant-rag):
 
 ```bash
-npx @smithery/cli install mcp-server-qdrant --client claude
+npx @smithery/cli install mcp-server-qdrant-rag --client claude
 ```
 
 ### Manual configuration of Claude Desktop
@@ -160,7 +165,7 @@ To use this server with the Claude Desktop app, add the following configuration 
 {
   "qdrant": {
     "command": "uvx",
-    "args": ["mcp-server-qdrant"],
+    "args": ["mcp-server-qdrant-rag"],
     "env": {
       "QDRANT_URL": "https://xyz-example.eu-central.aws.cloud.qdrant.io:6333",
       "QDRANT_API_KEY": "your_api_key",
@@ -177,7 +182,7 @@ For local Qdrant mode:
 {
   "qdrant": {
     "command": "uvx",
-    "args": ["mcp-server-qdrant"],
+    "args": ["mcp-server-qdrant-rag"],
     "env": {
       "QDRANT_LOCAL_PATH": "/path/to/qdrant/database",
       "COLLECTION_NAME": "your-collection-name",
@@ -204,7 +209,7 @@ QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="my-documents" \
 EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
 ENABLE_CHUNKING=true \
-uvx mcp-server-qdrant
+uvx mcp-server-qdrant-rag
 ```
 
 ### Advanced Chunking Configuration
@@ -218,7 +223,7 @@ ENABLE_CHUNKING=true \
 MAX_CHUNK_SIZE=1024 \
 CHUNK_OVERLAP=100 \
 CHUNK_STRATEGY=semantic \
-uvx mcp-server-qdrant
+uvx mcp-server-qdrant-rag
 ```
 
 ### Different Chunking Strategies
@@ -253,7 +258,7 @@ CHUNK_OVERLAP=30
 {
   "qdrant": {
     "command": "uvx",
-    "args": ["mcp-server-qdrant"],
+    "args": ["mcp-server-qdrant-rag"],
     "env": {
       "QDRANT_URL": "https://xyz-example.eu-central.aws.cloud.qdrant.io:6333",
       "QDRANT_API_KEY": "your_api_key",
@@ -280,7 +285,7 @@ MAX_CHUNK_SIZE=512 \
 CHUNK_OVERLAP=50 \
 CHUNK_STRATEGY=semantic \
 QDRANT_SEARCH_LIMIT=20 \
-uvx mcp-server-qdrant
+uvx mcp-server-qdrant-rag
 ```
 
 ## Migration Guide
@@ -381,7 +386,7 @@ FASTMCP_LOG_LEVEL=DEBUG \
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="debug-collection" \
 ENABLE_CHUNKING=true \
-uvx mcp-server-qdrant
+uvx mcp-server-qdrant-rag
 ```
 
 This will log:
@@ -413,7 +418,7 @@ TOOL_FIND_DESCRIPTION="Search for relevant code snippets based on natural langua
 The 'query' parameter should describe what you're looking for, \
 and the tool will return the most relevant code snippets. \
 Use this when you need to find existing code snippets for reuse or reference." \
-uvx mcp-server-qdrant --transport sse # Enable SSE transport
+uvx mcp-server-qdrant-rag --transport sse # Enable SSE transport
 ```
 
 In Cursor/Windsurf, you can then configure the MCP server in your settings by pointing to this running server using
@@ -444,7 +449,7 @@ that describe what you're looking for.
 > adjusting the descriptions to better match your team's workflow and the specific types of code snippets you want to
 > store and retrieve.
 
-**If you have successfully installed the `mcp-server-qdrant`, but still can't get it to work with Cursor, please
+**If you have successfully installed the `mcp-server-qdrant-rag`, but still can't get it to work with Cursor, please
 consider creating the [Cursor rules](https://docs.cursor.com/context/rules-for-ai) so the MCP tools are always used when
 the agent produces a new code snippet.** You can restrict the rules to only work for certain file types, to avoid using
 the MCP server for the documentation or other types of content.
@@ -454,19 +459,19 @@ the MCP server for the documentation or other types of content.
 You can enhance Claude Code's capabilities by connecting it to this MCP server, enabling semantic search over your
 existing codebase.
 
-#### Setting up mcp-server-qdrant
+#### Setting up mcp-server-qdrant-rag
 
 1. Add the MCP server to Claude Code:
 
     ```shell
-    # Add mcp-server-qdrant configured for code search
+    # Add mcp-server-qdrant-rag configured for code search
     claude mcp add code-search \
     -e QDRANT_URL="http://localhost:6333" \
     -e COLLECTION_NAME="code-repository" \
     -e EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
     -e TOOL_STORE_DESCRIPTION="Store code snippets with descriptions. The 'information' parameter should contain a natural language description of what the code does, while the actual code should be included in the 'metadata' parameter as a 'code' property." \
     -e TOOL_FIND_DESCRIPTION="Search for relevant code snippets using natural language. The 'query' parameter should describe the functionality you're looking for." \
-    -- uvx mcp-server-qdrant
+    -- uvx mcp-server-qdrant-rag
     ```
 
 2. Verify the server was added:
@@ -490,16 +495,16 @@ The MCP server can be run in development mode using the `mcp dev` command. This 
 inspector in your browser.
 
 ```shell
-COLLECTION_NAME=mcp-dev fastmcp dev src/mcp_server_qdrant/server.py
+COLLECTION_NAME=mcp-dev fastmcp dev src/mcp_server_qdrant_rag/server.py
 ```
 
 ### Using with VS Code
 
 For one-click installation, click one of the install buttons below:
 
-[![Install with UVX in VS Code](https://img.shields.io/badge/VS_Code-UVX-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with UVX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-UVX-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
+[![Install with UVX in VS Code](https://img.shields.io/badge/VS_Code-UVX-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant-rag&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant-rag%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with UVX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-UVX-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant-rag&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-server-qdrant-rag%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
 
-[![Install with Docker in VS Code](https://img.shields.io/badge/VS_Code-Docker-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with Docker in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Docker-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
+[![Install with Docker in VS Code](https://img.shields.io/badge/VS_Code-Docker-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant-rag&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant-rag%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D) [![Install with Docker in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Docker-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=qdrant-rag&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-p%22%2C%228000%3A8000%22%2C%22-i%22%2C%22--rm%22%2C%22-e%22%2C%22QDRANT_URL%22%2C%22-e%22%2C%22QDRANT_API_KEY%22%2C%22-e%22%2C%22COLLECTION_NAME%22%2C%22mcp-server-qdrant-rag%22%5D%2C%22env%22%3A%7B%22QDRANT_URL%22%3A%22%24%7Binput%3AqdrantUrl%7D%22%2C%22QDRANT_API_KEY%22%3A%22%24%7Binput%3AqdrantApiKey%7D%22%2C%22COLLECTION_NAME%22%3A%22%24%7Binput%3AcollectionName%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantUrl%22%2C%22description%22%3A%22Qdrant+URL%22%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22qdrantApiKey%22%2C%22description%22%3A%22Qdrant+API+Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22collectionName%22%2C%22description%22%3A%22Collection+Name%22%7D%5D&quality=insiders)
 
 #### Manual Installation
 
@@ -529,7 +534,7 @@ Add the following JSON block to your User Settings (JSON) file in VS Code. You c
     "servers": {
       "qdrant": {
         "command": "uvx",
-        "args": ["mcp-server-qdrant"],
+        "args": ["mcp-server-qdrant-rag"],
         "env": {
           "QDRANT_URL": "${input:qdrantUrl}",
           "QDRANT_API_KEY": "${input:qdrantApiKey}",
@@ -575,7 +580,7 @@ Or if you prefer using Docker, add this configuration instead:
           "-e", "QDRANT_URL",
           "-e", "QDRANT_API_KEY",
           "-e", "COLLECTION_NAME",
-          "mcp-server-qdrant"
+          "mcp-server-qdrant-rag"
         ],
         "env": {
           "QDRANT_URL": "${input:qdrantUrl}",
@@ -613,7 +618,7 @@ Alternatively, you can create a `.vscode/mcp.json` file in your workspace with t
   "servers": {
     "qdrant": {
       "command": "uvx",
-      "args": ["mcp-server-qdrant"],
+      "args": ["mcp-server-qdrant-rag"],
       "env": {
         "QDRANT_URL": "${input:qdrantUrl}",
         "QDRANT_API_KEY": "${input:qdrantApiKey}",
@@ -657,7 +662,7 @@ For workspace configuration with Docker, use this in `.vscode/mcp.json`:
         "-e", "QDRANT_URL",
         "-e", "QDRANT_API_KEY",
         "-e", "COLLECTION_NAME",
-        "mcp-server-qdrant"
+        "mcp-server-qdrant-rag"
       ],
       "env": {
         "QDRANT_URL": "${input:qdrantUrl}",
@@ -671,10 +676,10 @@ For workspace configuration with Docker, use this in `.vscode/mcp.json`:
 
 ## Contributing
 
-If you have suggestions for how mcp-server-qdrant could be improved, or want to report a bug, open an issue!
+If you have suggestions for how mcp-server-qdrant-rag could be improved, or want to report a bug, open an issue!
 We'd love all and any contributions.
 
-### Testing `mcp-server-qdrant` locally
+### Testing `mcp-server-qdrant-rag` locally
 
 The [MCP inspector](https://github.com/modelcontextprotocol/inspector) is a developer tool for testing and debugging MCP
 servers. It runs both a client UI (default port 5173) and an MCP proxy server (default port 3000). Open the client UI in
@@ -682,7 +687,7 @@ your browser to use the inspector.
 
 ```shell
 QDRANT_URL=":memory:" COLLECTION_NAME="test" \
-fastmcp dev src/mcp_server_qdrant/server.py
+fastmcp dev src/mcp_server_qdrant_rag/server.py
 ```
 
 Once started, open your browser to http://localhost:5173 to access the inspector interface.

@@ -4,9 +4,9 @@ import uuid
 import pytest
 from unittest.mock import patch, MagicMock
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.qdrant import QdrantConnector, Entry
-from mcp_server_qdrant.common.exceptions import VectorDimensionMismatchError
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant_rag.common.exceptions import VectorDimensionMismatchError
 
 
 @pytest.mark.asyncio

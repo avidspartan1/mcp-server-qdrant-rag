@@ -6,11 +6,11 @@ from pydantic import BaseModel, field_validator, model_validator
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
-from mcp_server_qdrant.settings import METADATA_PATH
-from mcp_server_qdrant.chunking.chunker import DocumentChunker
-from mcp_server_qdrant.chunking.models import DocumentChunk
-from mcp_server_qdrant.common.exceptions import (
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.settings import METADATA_PATH
+from mcp_server_qdrant_rag.chunking.chunker import DocumentChunker
+from mcp_server_qdrant_rag.chunking.models import DocumentChunk
+from mcp_server_qdrant_rag.common.exceptions import (
     VectorDimensionMismatchError,
     ChunkingError,
     CollectionAccessError

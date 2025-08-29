@@ -2,8 +2,8 @@ import uuid
 
 import pytest
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.qdrant import Entry, QdrantConnector
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.qdrant import Entry, QdrantConnector
 
 
 @pytest.fixture

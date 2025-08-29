@@ -5,8 +5,8 @@ from typing import List, Dict, Any
 from fastembed import TextEmbedding
 from fastembed.common.model_description import DenseModelDescription
 
-from mcp_server_qdrant.embeddings.base import EmbeddingProvider
-from mcp_server_qdrant.common.exceptions import ModelValidationError
+from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
+from mcp_server_qdrant_rag.common.exceptions import ModelValidationError
 
 logger = logging.getLogger(__name__)
 

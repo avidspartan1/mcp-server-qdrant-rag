@@ -1,14 +1,14 @@
 import pytest
 
-from mcp_server_qdrant.embeddings.types import EmbeddingProviderType
-from mcp_server_qdrant.settings import (
+from mcp_server_qdrant_rag.embeddings.types import EmbeddingProviderType
+from mcp_server_qdrant_rag.settings import (
     DEFAULT_TOOL_FIND_DESCRIPTION,
     DEFAULT_TOOL_STORE_DESCRIPTION,
     EmbeddingProviderSettings,
     QdrantSettings,
     ToolSettings,
 )
-from mcp_server_qdrant.common.exceptions import ConfigurationValidationError
+from mcp_server_qdrant_rag.common.exceptions import ConfigurationValidationError
 
 
 class TestQdrantSettings:

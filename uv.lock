@@ -966,7 +966,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mcp-server-qdrant"
+name = "mcp-server-qdrant-rag"
 version = "0.8.0"
 source = { editable = "." }
 dependencies = [

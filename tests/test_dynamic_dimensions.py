@@ -3,9 +3,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from qdrant_client import models
 
-from mcp_server_qdrant.embeddings.fastembed import FastEmbedProvider
-from mcp_server_qdrant.qdrant import QdrantConnector, Entry
-from mcp_server_qdrant.common.exceptions import VectorDimensionMismatchError
+from mcp_server_qdrant_rag.embeddings.fastembed import FastEmbedProvider
+from mcp_server_qdrant_rag.qdrant import QdrantConnector, Entry
+from mcp_server_qdrant_rag.common.exceptions import VectorDimensionMismatchError
 
 
 @pytest.mark.asyncio

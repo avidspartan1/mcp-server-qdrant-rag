@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers local development setup for mcp-server-qdrant using Docker Compose.
+This guide covers local development setup for mcp-server-qdrant-rag using Docker Compose.
 
 ## Quick Start
 
@@ -262,7 +262,7 @@ To test production-like behavior:
 docker-compose -f docker-compose.yml up
 
 # Or build production image
-docker build -t mcp-server-qdrant .
+docker build -t mcp-server-qdrant-rag .
 docker run -p 8000:8000 \
   -e QDRANT_URL=http://host.docker.internal:6333 \
   -e COLLECTION_NAME=test \

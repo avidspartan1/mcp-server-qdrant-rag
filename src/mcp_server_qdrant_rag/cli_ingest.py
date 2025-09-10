@@ -5,11 +5,82 @@ This module provides a command-line interface for bulk ingestion of text files
 into Qdrant collections, leveraging the existing MCP server components for
 consistent behavior and configuration.
 
-Example usage:
+The CLI tool supports four main operations:
+- ingest: Add new files to a knowledge base (creates collection if needed)
+- update: Update existing knowledge base with new or changed files
+- remove: Delete an entire knowledge base and all its data
+- list: Show available knowledge bases and their information
+
+BASIC USAGE EXAMPLES:
+
+    # Ingest all supported files from a directory
+    qdrant-ingest /path/to/documents
+
+    # Ingest with custom knowledge base name
     qdrant-ingest /path/to/documents --knowledgebase my-docs
-    qdrant-ingest update /path/to/documents --mode add-only
-    qdrant-ingest remove my-docs --force
+
+    # Ingest single file
+    qdrant-ingest /path/to/document.txt --knowledgebase single-doc
+
+    # Connect to remote Qdrant instance
+    qdrant-ingest /path/to/docs --url https://my-qdrant.example.com:6333
+
+ADVANCED USAGE EXAMPLES:
+
+    # Filter files with regex patterns
+    qdrant-ingest /path/to/code --include ".*\\.py$" --exclude ".*test.*"
+    
+    # Use specific embedding model
+    qdrant-ingest /path/to/docs --embedding sentence-transformers/all-MiniLM-L6-v2
+    
+    # Verbose output with progress tracking
+    qdrant-ingest /path/to/docs --verbose
+    
+    # Dry run to see what would be processed
+    qdrant-ingest /path/to/docs --dry-run
+
+UPDATE OPERATIONS:
+
+    # Add new files to existing knowledge base (default mode)
+    qdrant-ingest update /path/to/new-docs --knowledgebase my-docs
+    
+    # Replace all content in knowledge base
+    qdrant-ingest update /path/to/docs --knowledgebase my-docs --mode replace
+    
+    # Update with file filtering
+    qdrant-ingest update /path/to/docs --include ".*\\.md$" --mode add-only
+
+MANAGEMENT OPERATIONS:
+
+    # List all knowledge bases
     qdrant-ingest list
+    
+    # Remove knowledge base (with confirmation)
+    qdrant-ingest remove my-docs
+    
+    # Force remove without confirmation
+    qdrant-ingest remove my-docs --force
+
+SUPPORTED FILE TYPES:
+    .txt, .md, .py, .js, .json, .yaml, .yml, .rst, .tf, .java, .sh, .go, .rb, 
+    .ts, .conf, .ini, .cfg, .toml, .xml, .html, .css, .sql
+
+CONFIGURATION:
+    The tool uses environment variables for default settings:
+    - QDRANT_URL: Default Qdrant server URL
+    - QDRANT_API_KEY: API key for authentication
+    - EMBEDDING_MODEL: Default embedding model
+    
+    Command-line arguments override environment variables.
+
+ERROR HANDLING:
+    - Individual file failures don't stop the entire operation
+    - Detailed error messages with suggested fixes
+    - Progress tracking shows success/failure rates
+    - Exit codes indicate operation status (0=success, 1=partial failure, etc.)
+
+For more detailed help on specific commands, use:
+    qdrant-ingest <command> --help
 """
 
 import argparse
@@ -704,8 +775,35 @@ class FileDiscovery:
     """
     Handles file system scanning and filtering for CLI operations.
     
-    This class provides functionality to recursively discover files in directories,
-    apply include/exclude regex patterns, and filter by supported file extensions.
+    This class provides comprehensive file discovery functionality including:
+    - Recursive directory traversal with configurable depth
+    - Regex-based include/exclude pattern filtering
+    - File extension filtering for supported text formats
+    - Binary file detection and exclusion
+    - Hidden file/directory exclusion (files/dirs starting with '.')
+    - Encoding detection and validation
+    - File metadata extraction (size, modification time, etc.)
+    - Permission error handling and graceful degradation
+    
+    The discovery process follows this order:
+    1. Scan filesystem (recursively or single-level)
+    2. Skip hidden files and directories
+    3. Check supported file extensions
+    4. Apply include patterns (if specified)
+    5. Apply exclude patterns (if specified)
+    6. Detect file encoding and skip binary files
+    7. Extract file metadata for processing
+    
+    Example usage:
+        discovery = FileDiscovery(['.txt', '.md', '.py'])
+        files = await discovery.discover_files(
+            Path('/path/to/docs'),
+            include_patterns=['.*\\.md$'],
+            exclude_patterns=['.*test.*']
+        )
+        
+    Attributes:
+        supported_extensions: List of file extensions to process (e.g., ['.txt', '.md'])
     """
     
     def __init__(self, supported_extensions: List[str]):
@@ -1021,11 +1119,43 @@ class FileDiscovery:
 
 class ContentProcessor:
     """
-    Processes file content for ingestion into Qdrant.
+    Processes file content for ingestion into Qdrant vector database.
     
-    This class handles file reading, encoding detection, binary file detection,
-    and metadata extraction to convert FileInfo objects into Entry objects
-    suitable for storage in Qdrant collections.
+    This class handles the complete pipeline for converting discovered files
+    into Entry objects ready for vector storage:
+    
+    Processing Pipeline:
+    1. File validation (size limits, binary detection)
+    2. Content reading with encoding detection and fallbacks
+    3. Text validation (control character detection)
+    4. Metadata extraction (file properties, timestamps, classification)
+    5. Entry object creation with proper structure
+    
+    Features:
+    - Multi-encoding support with intelligent fallbacks (UTF-8, Latin-1, CP1252, etc.)
+    - Binary file detection and exclusion
+    - File size limits to prevent memory issues
+    - Control character detection for binary content identification
+    - Comprehensive metadata extraction including file classification
+    - Error handling with detailed context about failed files
+    
+    Metadata Extraction:
+    - File identification (path, name, extension, stem)
+    - File properties (size, encoding, estimated tokens)
+    - Timestamps (modification time, ingestion time)
+    - Source information (ingestion method, source type)
+    - Directory information (parent directory, relative path)
+    - File classification (type category, size category)
+    
+    Example usage:
+        processor = ContentProcessor(max_file_size=50*1024*1024)  # 50MB limit
+        entry = await processor.process_file(file_info)
+        if entry:
+            # File successfully processed and ready for storage
+            pass
+            
+    Attributes:
+        max_file_size: Maximum file size to process in bytes (default: 100MB)
     """
     
     def __init__(self, max_file_size: int = 100 * 1024 * 1024):  # 100MB default
@@ -1788,9 +1918,41 @@ class BaseOperation(ABC):
     """
     Abstract base class for all CLI operations.
     
-    This class provides shared functionality for all knowledge base operations
-    including configuration management, Qdrant connection setup, and common
-    validation patterns.
+    This class provides the foundation for all knowledge base operations including
+    ingest, update, remove, and list. It handles common functionality such as:
+    
+    Core Responsibilities:
+    - Configuration validation and management
+    - Qdrant connection establishment and testing
+    - Embedding provider initialization with model intelligence
+    - Progress reporting and user feedback coordination
+    - Error handling and recovery mechanisms
+    - Dry-run mode support for safe operation preview
+    
+    Shared Features:
+    - Automatic embedding model detection for existing collections
+    - Connection health checks before operations
+    - Comprehensive error reporting with actionable suggestions
+    - Progress tracking with time estimates and success rates
+    - Graceful handling of network and storage errors
+    
+    Subclass Implementation:
+    Each concrete operation class must implement:
+    - execute(): Main operation logic
+    - _validate_preconditions(): Operation-specific validation
+    - Operation-specific business logic
+    
+    Example usage pattern:
+        operation = ConcreteOperation(config)
+        result = await operation.execute()
+        if result.success:
+            print(f"Processed {result.files_processed} files")
+            
+    Attributes:
+        config: Complete CLI configuration including all settings
+        connector: QdrantConnector instance for database operations
+        embedding_provider: Embedding provider for text vectorization
+        progress_reporter: Progress reporter for user feedback
     """
 
     def __init__(self, config: IngestConfig):
@@ -1979,10 +2141,51 @@ class BaseOperation(ABC):
 
 class IngestOperation(BaseOperation):
     """
-    Handles file ingestion into new or existing collections.
+    Handles file ingestion into new or existing Qdrant collections.
     
-    This operation discovers files, processes their content, and stores them
-    in Qdrant collections with appropriate metadata and chunking.
+    This operation processes files from the filesystem and stores them as vector
+    embeddings in Qdrant collections for semantic search and retrieval.
+    
+    Operation Flow:
+    1. Validate configuration and check Qdrant connectivity
+    2. Discover files using configured patterns and filters
+    3. Check if target collection exists and validate embedding model compatibility
+    4. Create collection if needed with appropriate vector dimensions
+    5. Process files in batches with progress tracking
+    6. Generate embeddings and store in Qdrant with metadata
+    7. Report final statistics and any errors encountered
+    
+    Key Features:
+    - Intelligent embedding model selection (auto-detect existing or use default)
+    - Batch processing with configurable batch sizes for memory efficiency
+    - Comprehensive file filtering with regex patterns
+    - Binary file detection and automatic exclusion
+    - Encoding detection with multiple fallback strategies
+    - Detailed metadata extraction and storage
+    - Progress tracking with time estimates and success rates
+    - Error recovery - individual file failures don't stop the operation
+    - Dry-run support for safe operation preview
+    
+    Collection Management:
+    - Creates new collections with optimal settings if they don't exist
+    - Validates embedding model compatibility for existing collections
+    - Automatically configures vector dimensions based on embedding model
+    - Preserves existing collection settings and data
+    
+    Error Handling:
+    - Graceful handling of file access errors (permissions, encoding, etc.)
+    - Network error recovery with retry mechanisms
+    - Detailed error reporting with suggested fixes
+    - Partial success support - processes as many files as possible
+    
+    Example usage:
+        config = IngestConfig(...)
+        operation = IngestOperation(config)
+        result = await operation.execute()
+        
+        print(f"Success: {result.success}")
+        print(f"Files processed: {result.files_processed}")
+        print(f"Chunks created: {result.chunks_created}")
     """
 
     async def execute(self) -> OperationResult:
@@ -2163,10 +2366,56 @@ class IngestOperation(BaseOperation):
 
 class UpdateOperation(BaseOperation):
     """
-    Handles updating existing collections with new content.
+    Handles updating existing Qdrant collections with new or modified content.
     
-    Supports both add-only mode (append new files) and replace mode
-    (clear collection and replace with new content).
+    This operation provides two update modes for maintaining knowledge bases:
+    - add-only: Intelligently adds new files and updates modified files
+    - replace: Completely replaces all collection content with new files
+    
+    Update Modes:
+    
+    Add-Only Mode (default):
+    - Compares file modification times with stored metadata
+    - Adds files that don't exist in the collection
+    - Updates files that have been modified since last ingestion
+    - Preserves existing files that haven't changed
+    - Maintains collection history and incremental updates
+    
+    Replace Mode:
+    - Completely clears the existing collection
+    - Processes all discovered files as new content
+    - Requires confirmation unless --force is specified
+    - Useful for complete knowledge base rebuilds
+    - WARNING: Permanently deletes all existing data
+    
+    Operation Flow:
+    1. Validate that target collection exists
+    2. Verify embedding model compatibility
+    3. Discover files using configured patterns and filters
+    4. For add-only: Filter files based on modification times
+    5. For replace: Confirm destructive operation with user
+    6. Process files with progress tracking and error handling
+    7. Update collection with new/modified content
+    8. Report statistics including files added, updated, and skipped
+    
+    Key Features:
+    - Intelligent change detection based on file modification times
+    - Batch processing for memory efficiency
+    - Comprehensive error handling and recovery
+    - Progress tracking with detailed statistics
+    - Dry-run support for safe operation preview
+    - User confirmation for destructive operations
+    
+    Example usage:
+        # Add-only update (safe, incremental)
+        config = IngestConfig(cli_settings=CLISettings(update_mode="add-only"))
+        operation = UpdateOperation(config)
+        result = await operation.execute()
+        
+        # Replace update (destructive, complete rebuild)
+        config = IngestConfig(cli_settings=CLISettings(update_mode="replace"))
+        operation = UpdateOperation(config)
+        result = await operation.execute()
     """
 
     async def execute(self) -> OperationResult:
@@ -2399,9 +2648,56 @@ class UpdateOperation(BaseOperation):
 
 class RemoveOperation(BaseOperation):
     """
-    Handles knowledge base removal with confirmation prompts.
+    Handles complete knowledge base removal with safety confirmations.
     
-    This operation deletes entire Qdrant collections after user confirmation.
+    This operation permanently deletes entire Qdrant collections including all
+    stored documents, embeddings, metadata, and associated data structures.
+    
+    Safety Features:
+    - Interactive confirmation prompts (unless --force is specified)
+    - Collection existence verification before deletion
+    - Clear warnings about data loss and irreversibility
+    - Detailed information display before confirmation
+    - Graceful handling of non-existent collections
+    
+    Operation Flow:
+    1. Validate Qdrant connection and collection existence
+    2. Display collection information (size, document count, etc.)
+    3. Show clear warning about permanent data loss
+    4. Request user confirmation (unless --force mode)
+    5. Perform collection deletion
+    6. Verify successful removal
+    7. Report operation results
+    
+    Confirmation Process:
+    - Shows collection details (name, size, document count)
+    - Displays clear warning about irreversible data loss
+    - Requires explicit "yes" confirmation
+    - Can be bypassed with --force flag for automation
+    - Supports cancellation at any point
+    
+    Error Handling:
+    - Graceful handling of non-existent collections
+    - Clear error messages for permission issues
+    - Network error recovery and reporting
+    - Partial failure detection and reporting
+    
+    WARNING: This operation is irreversible. All data in the specified
+    knowledge base will be permanently deleted and cannot be recovered.
+    
+    Example usage:
+        # Interactive removal with confirmation
+        config = IngestConfig(knowledgebase_name="old-docs")
+        operation = RemoveOperation(config)
+        result = await operation.execute()
+        
+        # Forced removal without confirmation (DANGEROUS)
+        config = IngestConfig(
+            knowledgebase_name="old-docs",
+            cli_settings=CLISettings(force_operation=True)
+        )
+        operation = RemoveOperation(config)
+        result = await operation.execute()
     """
 
     async def execute(self) -> OperationResult:
@@ -2506,10 +2802,66 @@ class RemoveOperation(BaseOperation):
 
 class ListOperation(BaseOperation):
     """
-    Handles listing available knowledge bases with collection information.
+    Handles listing and displaying information about available knowledge bases.
     
-    This operation displays all available collections with metadata like
-    size, embedding model, and compatibility information.
+    This operation provides a comprehensive overview of all Qdrant collections
+    accessible through the configured connection, including detailed metadata
+    and compatibility information for each knowledge base.
+    
+    Information Displayed:
+    - Collection names and identifiers
+    - Document/chunk counts and storage statistics
+    - Embedding models and vector dimensions
+    - Collection creation and modification dates
+    - Storage size estimates and optimization status
+    - Compatibility with current CLI configuration
+    - Health status and accessibility
+    
+    Display Format:
+    - Tabular format for easy scanning
+    - Color-coded status indicators
+    - Size information in human-readable format
+    - Embedding model compatibility warnings
+    - Collection health and accessibility status
+    
+    Operation Flow:
+    1. Establish connection to Qdrant instance
+    2. Retrieve list of all accessible collections
+    3. Gather detailed metadata for each collection
+    4. Analyze compatibility with current configuration
+    5. Format and display information in user-friendly format
+    6. Report any access issues or warnings
+    
+    Compatibility Analysis:
+    - Checks embedding model compatibility
+    - Identifies collections with dimension mismatches
+    - Warns about collections requiring different models
+    - Suggests configuration changes for incompatible collections
+    
+    Error Handling:
+    - Graceful handling of inaccessible collections
+    - Clear reporting of connection issues
+    - Partial listing when some collections fail to load
+    - Detailed error messages with suggested fixes
+    
+    Example output:
+        Knowledge Bases in Qdrant (http://localhost:6333):
+        
+        ┌─────────────────┬──────────┬─────────────┬──────────────────────────┬────────┐
+        │ Name            │ Documents│ Size        │ Embedding Model          │ Status │
+        ├─────────────────┼──────────┼─────────────┼──────────────────────────┼────────┤
+        │ my-docs         │ 1,234    │ 45.2 MB     │ nomic-embed-text-v1.5-Q  │ ✅ OK  │
+        │ code-snippets   │ 567      │ 12.8 MB     │ all-MiniLM-L6-v2         │ ✅ OK  │
+        │ old-collection  │ 89       │ 3.1 MB      │ text-embedding-ada-002   │ ⚠️ OLD │
+        └─────────────────┴──────────┴─────────────┴──────────────────────────┴────────┘
+    
+    Example usage:
+        config = IngestConfig(qdrant_settings=QdrantSettings(...))
+        operation = ListOperation(config)
+        result = await operation.execute()
+        
+        if result.success:
+            print(f"Found {result.files_processed} knowledge bases")
     """
 
     async def execute(self) -> OperationResult:
@@ -3134,18 +3486,79 @@ class CLIArgumentParser:
         self.parser = self._create_parser()
 
     def _create_parser(self) -> argparse.ArgumentParser:
-        """Create and configure the argument parser."""
+        """Create and configure the argument parser with comprehensive help text."""
         parser = argparse.ArgumentParser(
             prog="qdrant-ingest",
-            description="Ingest files into Qdrant vector database for semantic search",
+            description="""
+Ingest files into Qdrant vector database for semantic search and retrieval.
+
+This tool processes text files from your filesystem and stores them in Qdrant
+collections with vector embeddings for semantic search. It supports various
+file types, intelligent filtering, and multiple operation modes.
+            """.strip(),
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
-Examples:
+EXAMPLES:
+
+Basic Operations:
   qdrant-ingest /path/to/documents
-  qdrant-ingest /path/to/documents --knowledgebase my-docs
-  qdrant-ingest update /path/to/documents --mode add-only
-  qdrant-ingest remove my-docs --force
+    └─ Ingest all supported files from directory
+
+  qdrant-ingest /path/to/document.txt --knowledgebase my-kb
+    └─ Ingest single file with custom knowledge base name
+
+  qdrant-ingest /path/to/docs --url https://qdrant.example.com:6333
+    └─ Connect to remote Qdrant instance
+
+File Filtering:
+  qdrant-ingest /path/to/code --include ".*\\.py$" --exclude ".*test.*"
+    └─ Include only Python files, exclude test files
+
+  qdrant-ingest /path/to/docs --include ".*\\.(md|txt)$"
+    └─ Include only Markdown and text files
+
+Update Operations:
+  qdrant-ingest update /path/to/docs --mode add-only
+    └─ Add new files to existing knowledge base
+
+  qdrant-ingest update /path/to/docs --mode replace --force
+    └─ Replace all content (skip confirmation)
+
+Management:
   qdrant-ingest list
+    └─ Show all knowledge bases and their info
+
+  qdrant-ingest remove old-kb --force
+    └─ Delete knowledge base without confirmation
+
+Advanced Options:
+  qdrant-ingest /path/to/docs --verbose --dry-run
+    └─ Show what would be processed without making changes
+
+  qdrant-ingest /path/to/docs --embedding sentence-transformers/all-MiniLM-L6-v2
+    └─ Use specific embedding model
+
+SUPPORTED FILE TYPES:
+  Text: .txt, .md, .rst
+  Code: .py, .js, .ts, .java, .go, .rb, .sh
+  Config: .json, .yaml, .yml, .toml, .ini, .cfg, .conf
+  Web: .html, .css, .xml
+  Data: .sql, .tf, .tftpl
+
+ENVIRONMENT VARIABLES:
+  QDRANT_URL       Default Qdrant server URL
+  QDRANT_API_KEY   API key for authentication  
+  EMBEDDING_MODEL  Default embedding model
+
+EXIT CODES:
+  0  Success
+  1  Partial success (some files failed)
+  2  Configuration error
+  3  Qdrant connection error
+  4  Complete failure (no files processed)
+  5  Operation failed with partial results
+
+For command-specific help: qdrant-ingest <command> --help
             """,
         )
 
@@ -3156,7 +3569,20 @@ Examples:
 
         # Ingest command (default)
         ingest_parser = subparsers.add_parser(
-            "ingest", help="Ingest files into knowledge base (default)"
+            "ingest", 
+            help="Ingest files into knowledge base (default)",
+            description="""
+Ingest files from the specified path into a Qdrant knowledge base.
+
+This command processes all supported text files in the given path (recursively
+for directories) and stores them with vector embeddings for semantic search.
+If the knowledge base doesn't exist, it will be created automatically.
+
+The embedding model is intelligently selected:
+- For new knowledge bases: uses specified model or defaults to nomic-embed-text
+- For existing knowledge bases: automatically detects and uses the existing model
+            """.strip(),
+            formatter_class=argparse.RawDescriptionHelpFormatter
         )
         self._add_common_arguments(ingest_parser)
         self._add_path_argument(ingest_parser)
@@ -3164,7 +3590,18 @@ Examples:
 
         # Update command
         update_parser = subparsers.add_parser(
-            "update", help="Update existing knowledge base"
+            "update", 
+            help="Update existing knowledge base with new content",
+            description="""
+Update an existing knowledge base with new or modified files.
+
+Two update modes are available:
+- add-only (default): Add new files and update modified files, keep existing
+- replace: Remove all existing content and replace with new files
+
+The tool tracks file modification times to detect changes in add-only mode.
+            """.strip(),
+            formatter_class=argparse.RawDescriptionHelpFormatter
         )
         self._add_common_arguments(update_parser)
         self._add_path_argument(update_parser)
@@ -3173,24 +3610,51 @@ Examples:
             "--mode",
             choices=["add-only", "replace"],
             default="add-only",
-            help="Update mode: add-only (default) or replace existing content",
+            help="Update mode: add-only (default) preserves existing content, replace removes all existing content first",
         )
 
         # Remove command
         remove_parser = subparsers.add_parser(
-            "remove", help="Remove knowledge base"
+            "remove", 
+            help="Remove entire knowledge base and all its data",
+            description="""
+Permanently delete a knowledge base and all its stored documents.
+
+This operation cannot be undone. By default, you will be prompted for
+confirmation unless --force is specified.
+
+WARNING: This will delete all documents, embeddings, and metadata
+associated with the specified knowledge base.
+            """.strip(),
+            formatter_class=argparse.RawDescriptionHelpFormatter
         )
         self._add_qdrant_arguments(remove_parser)
         remove_parser.add_argument(
-            "knowledgebase", help="Name of the knowledge base to remove"
+            "knowledgebase", 
+            help="Name of the knowledge base to remove (must match exactly)"
         )
         remove_parser.add_argument(
-            "--force", action="store_true", help="Skip confirmation prompts"
+            "--force", 
+            action="store_true", 
+            help="Skip confirmation prompt and remove immediately (DANGEROUS)"
         )
 
         # List command
         list_parser = subparsers.add_parser(
-            "list", help="List available knowledge bases"
+            "list", 
+            help="List available knowledge bases with information",
+            description="""
+Display all available knowledge bases in the connected Qdrant instance.
+
+Shows information about each knowledge base including:
+- Name and collection details
+- Number of stored documents/chunks
+- Embedding model used
+- Vector dimensions
+- Creation and modification dates
+- Storage size estimates
+            """.strip(),
+            formatter_class=argparse.RawDescriptionHelpFormatter
         )
         self._add_qdrant_arguments(list_parser)
 
@@ -3200,63 +3664,103 @@ Examples:
         return parser
 
     def _add_common_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Add common arguments to a parser."""
+        """Add common arguments to a parser with detailed help text."""
         self._add_qdrant_arguments(parser)
         self._add_embedding_arguments(parser)
         
         parser.add_argument(
             "--knowledgebase",
-            help="Knowledge base name (default: derived from PATH)",
+            metavar="NAME",
+            help="Knowledge base name to use for the Qdrant collection. "
+                 "If not specified, derives name from the path (directory name or filename). "
+                 "Must contain only alphanumeric characters, hyphens, and underscores.",
         )
         parser.add_argument(
-            "--verbose", "-v", action="store_true", help="Enable verbose logging"
+            "--verbose", "-v", 
+            action="store_true", 
+            help="Enable verbose output showing detailed progress, file-by-file processing status, "
+                 "discovery statistics, and additional diagnostic information."
         )
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Show what would be processed without making changes",
+            help="Preview mode: show exactly what files would be processed and what operations "
+                 "would be performed without making any actual changes to the knowledge base. "
+                 "Useful for testing filters and validating configuration.",
         )
 
     def _add_qdrant_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Add Qdrant connection arguments."""
+        """Add Qdrant connection arguments with detailed help text."""
         parser.add_argument(
             "--url",
+            metavar="URL",
             default="http://localhost:6333",
-            help="Qdrant server URL (default: http://localhost:6333)",
+            help="Qdrant server URL including protocol and port. "
+                 "Examples: http://localhost:6333 (local), https://my-qdrant.example.com:6333 (remote). "
+                 "Can also be set via QDRANT_URL environment variable. (default: http://localhost:6333)",
         )
-        parser.add_argument("--api-key", help="Qdrant API key")
+        parser.add_argument(
+            "--api-key", 
+            metavar="KEY",
+            help="API key for Qdrant authentication (required for Qdrant Cloud and secured instances). "
+                 "Can also be set via QDRANT_API_KEY environment variable. "
+                 "Not needed for local unsecured instances."
+        )
 
     def _add_embedding_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Add embedding model arguments."""
+        """Add embedding model arguments with detailed help text."""
         parser.add_argument(
             "--embedding",
+            metavar="MODEL",
             default="nomic-ai/nomic-embed-text-v1.5-Q",
-            help="Embedding model (default: nomic-ai/nomic-embed-text-v1.5-Q)",
+            help="Embedding model to use for text vectorization. "
+                 "For new knowledge bases only - existing knowledge bases automatically use their configured model. "
+                 "Popular options: 'nomic-ai/nomic-embed-text-v1.5-Q' (fast, good quality), "
+                 "'sentence-transformers/all-MiniLM-L6-v2' (lightweight), "
+                 "'sentence-transformers/all-mpnet-base-v2' (high quality). "
+                 "Can also be set via EMBEDDING_MODEL environment variable. "
+                 "(default: nomic-ai/nomic-embed-text-v1.5-Q)",
         )
 
     def _add_path_argument(
         self, parser: argparse.ArgumentParser, required: bool = True
     ) -> None:
-        """Add path argument."""
+        """Add path argument with detailed help text."""
         parser.add_argument(
             "path",
             nargs="?" if not required else None,
-            help="Path to files or directory to process",
+            metavar="PATH",
+            help="Path to file or directory to process. "
+                 "For directories, recursively processes all supported files. "
+                 "For single files, processes just that file. "
+                 "Supported file types: .txt, .md, .py, .js, .json, .yaml, .yml, .rst, "
+                 ".tf, .java, .sh, .go, .rb, .ts, .conf, .ini, .cfg, .toml, .xml, .html, .css, .sql. "
+                 "Hidden files and directories (starting with .) are automatically excluded.",
         )
 
     def _add_file_filtering_arguments(self, parser: argparse.ArgumentParser) -> None:
-        """Add file filtering arguments."""
+        """Add file filtering arguments with detailed help text."""
         parser.add_argument(
             "--include",
             action="append",
             dest="include_patterns",
-            help="Include files matching regex pattern (can be used multiple times)",
+            metavar="PATTERN",
+            help="Include only files whose paths match this regex pattern. "
+                 "Can be used multiple times to specify multiple patterns (files matching ANY pattern are included). "
+                 "Applied before exclude patterns. "
+                 "Examples: --include '.*\\.py$' (Python files), --include '.*\\.(md|txt)$' (Markdown or text files). "
+                 "Pattern is matched against the full file path.",
         )
         parser.add_argument(
             "--exclude",
             action="append",
             dest="exclude_patterns",
-            help="Exclude files matching regex pattern (can be used multiple times)",
+            metavar="PATTERN",
+            help="Exclude files whose paths match this regex pattern. "
+                 "Can be used multiple times to specify multiple patterns (files matching ANY pattern are excluded). "
+                 "Applied after include patterns. "
+                 "Examples: --exclude '.*test.*' (exclude test files), --exclude '.*\\.(log|tmp)$' (exclude logs and temp files). "
+                 "Pattern is matched against the full file path.",
         )
 
     def parse_args(self, args: Optional[List[str]] = None) -> argparse.Namespace:
@@ -3307,20 +3811,31 @@ class CLIValidator:
         return errors
 
     def _validate_path_command(self, args: argparse.Namespace) -> List[str]:
-        """Validate arguments for path-based commands (ingest, update)."""
+        """Validate arguments for path-based commands (ingest, update) with actionable error messages."""
         errors = []
 
         # Path is required for ingest and update commands
         if not args.path:
-            errors.append(f"PATH argument is required for '{args.command}' command")
+            errors.append(
+                f"❌ PATH argument is required for '{args.command}' command.\n"
+                f"   💡 Try: qdrant-ingest {args.command} /path/to/your/files"
+            )
             return errors
 
         # Validate path exists
         path = Path(args.path)
         if not path.exists():
-            errors.append(f"Path does not exist: {args.path}")
+            errors.append(
+                f"❌ Path does not exist: {args.path}\n"
+                f"   💡 Check the path spelling and ensure the file or directory exists.\n"
+                f"   💡 Use absolute paths to avoid confusion: {Path(args.path).resolve()}"
+            )
         elif not (path.is_file() or path.is_dir()):
-            errors.append(f"Path must be a file or directory: {args.path}")
+            errors.append(
+                f"❌ Path must be a regular file or directory: {args.path}\n"
+                f"   💡 Symbolic links, device files, and other special files are not supported.\n"
+                f"   💡 If this is a symbolic link, try using the target path instead."
+            )
 
         # Validate knowledgebase name derivation only if not explicitly provided
         if path.exists() and not args.knowledgebase:
@@ -3328,29 +3843,43 @@ class CLIValidator:
                 derived_name = self._derive_knowledgebase_name(path)
                 if not derived_name or not derived_name.strip():
                     errors.append(
-                        f"Cannot derive knowledgebase name from path: {args.path}. "
-                        "Please specify --knowledgebase explicitly."
+                        f"❌ Cannot derive knowledgebase name from path: {args.path}\n"
+                        f"   💡 The path name contains only special characters or is empty.\n"
+                        f"   💡 Specify a custom name: --knowledgebase my-knowledge-base\n"
+                        f"   💡 Use alphanumeric characters, hyphens, and underscores only."
                     )
             except Exception as e:
-                errors.append(f"Error deriving knowledgebase name: {e}")
+                errors.append(
+                    f"❌ Error deriving knowledgebase name from path: {e}\n"
+                    f"   💡 Specify a custom name: --knowledgebase my-knowledge-base\n"
+                    f"   💡 Use alphanumeric characters, hyphens, and underscores only."
+                )
         elif args.knowledgebase and not self._is_valid_knowledgebase_name(args.knowledgebase):
             errors.append(
-                f"Invalid knowledgebase name: {args.knowledgebase}. "
-                "Name must contain only alphanumeric characters, hyphens, and underscores."
+                f"❌ Invalid knowledgebase name: '{args.knowledgebase}'\n"
+                f"   💡 Names must contain only alphanumeric characters, hyphens (-), and underscores (_).\n"
+                f"   💡 Examples of valid names: my-docs, user_files, project123, documentation\n"
+                f"   💡 Invalid characters will be automatically sanitized if you don't specify --knowledgebase."
             )
 
         return errors
 
     def _validate_remove_command(self, args: argparse.Namespace) -> List[str]:
-        """Validate arguments for remove command."""
+        """Validate arguments for remove command with actionable error messages."""
         errors = []
 
         if not args.knowledgebase:
-            errors.append("Knowledgebase name is required for 'remove' command")
+            errors.append(
+                f"❌ Knowledgebase name is required for 'remove' command.\n"
+                f"   💡 Try: qdrant-ingest remove my-knowledge-base\n"
+                f"   💡 List available knowledge bases: qdrant-ingest list"
+            )
         elif not self._is_valid_knowledgebase_name(args.knowledgebase):
             errors.append(
-                f"Invalid knowledgebase name: {args.knowledgebase}. "
-                "Name must contain only alphanumeric characters, hyphens, and underscores."
+                f"❌ Invalid knowledgebase name: '{args.knowledgebase}'\n"
+                f"   💡 Names must contain only alphanumeric characters, hyphens (-), and underscores (_).\n"
+                f"   💡 Check the exact name with: qdrant-ingest list\n"
+                f"   💡 Names are case-sensitive and must match exactly."
             )
 
         return errors
@@ -3361,23 +3890,32 @@ class CLIValidator:
         return []
 
     def _validate_qdrant_url(self, url: str) -> List[str]:
-        """Validate Qdrant URL format."""
+        """Validate Qdrant URL format with actionable error messages."""
         errors = []
 
         if not url:
-            errors.append("Qdrant URL cannot be empty")
+            errors.append(
+                f"❌ Qdrant URL cannot be empty.\n"
+                f"   💡 For local Qdrant: --url http://localhost:6333\n"
+                f"   💡 For remote Qdrant: --url https://your-qdrant.example.com:6333\n"
+                f"   💡 Or set QDRANT_URL environment variable"
+            )
             return errors
 
         # Basic URL validation
         if not (url.startswith("http://") or url.startswith("https://")):
             errors.append(
-                f"Invalid Qdrant URL format: {url}. Must start with http:// or https://"
+                f"❌ Invalid Qdrant URL format: {url}\n"
+                f"   💡 URL must start with http:// or https://\n"
+                f"   💡 For local Qdrant: http://localhost:6333\n"
+                f"   💡 For remote Qdrant: https://your-qdrant.example.com:6333\n"
+                f"   💡 Include the port number (usually 6333 for Qdrant)"
             )
 
         return errors
 
     def _validate_regex_patterns(self, args: argparse.Namespace) -> List[str]:
-        """Validate regex patterns for include/exclude filters."""
+        """Validate regex patterns for include/exclude filters with actionable error messages."""
         errors = []
 
         # Validate include patterns
@@ -3386,7 +3924,15 @@ class CLIValidator:
                 try:
                     re.compile(pattern)
                 except re.error as e:
-                    errors.append(f"Invalid include pattern '{pattern}': {e}")
+                    errors.append(
+                        f"❌ Invalid include pattern '{pattern}': {e}\n"
+                        f"   💡 Common patterns:\n"
+                        f"      --include '.*\\.py$'           (Python files)\n"
+                        f"      --include '.*\\.(md|txt)$'     (Markdown or text files)\n"
+                        f"      --include '.*/docs/.*'        (files in docs directories)\n"
+                        f"   💡 Remember to escape special characters like . and $ with backslashes\n"
+                        f"   💡 Test your pattern at regex101.com before using"
+                    )
 
         # Validate exclude patterns
         if hasattr(args, "exclude_patterns") and args.exclude_patterns:
@@ -3394,7 +3940,15 @@ class CLIValidator:
                 try:
                     re.compile(pattern)
                 except re.error as e:
-                    errors.append(f"Invalid exclude pattern '{pattern}': {e}")
+                    errors.append(
+                        f"❌ Invalid exclude pattern '{pattern}': {e}\n"
+                        f"   💡 Common patterns:\n"
+                        f"      --exclude '.*test.*'          (exclude test files)\n"
+                        f"      --exclude '.*\\.(log|tmp)$'    (exclude logs and temp files)\n"
+                        f"      --exclude '.*/node_modules/.*' (exclude node_modules)\n"
+                        f"   💡 Remember to escape special characters like . and $ with backslashes\n"
+                        f"   💡 Test your pattern at regex101.com before using"
+                    )
 
         return errors
 
@@ -3810,17 +4364,62 @@ async def main_async():
         
     except KeyboardInterrupt:
         print("\n🚫 Operation cancelled by user", file=sys.stderr)
+        print("💡 You can resume operations later - no partial data was committed", file=sys.stderr)
         sys.exit(130)  # Standard exit code for SIGINT
     except ConfigurationValidationError as e:
         print(f"❌ Configuration error: {e}", file=sys.stderr)
+        print("💡 Check your command line arguments and environment variables", file=sys.stderr)
+        print("💡 Use --help for detailed usage information", file=sys.stderr)
         sys.exit(2)  # Configuration error
     except MCPQdrantError as e:
         print(f"❌ Qdrant error: {e}", file=sys.stderr)
+        print("💡 Check your Qdrant connection settings:", file=sys.stderr)
+        print("   • Verify the URL is correct and Qdrant is running", file=sys.stderr)
+        print("   • Check API key if using Qdrant Cloud", file=sys.stderr)
+        print("   • Ensure network connectivity to the Qdrant instance", file=sys.stderr)
+        print("💡 Test connection: qdrant-ingest list", file=sys.stderr)
         sys.exit(3)  # Qdrant-specific error
+    except VectorDimensionMismatchError as e:
+        print(f"❌ Embedding model mismatch: {e}", file=sys.stderr)
+        print("💡 This knowledge base uses a different embedding model", file=sys.stderr)
+        print("💡 Either:", file=sys.stderr)
+        print("   • Use the same embedding model as the existing collection", file=sys.stderr)
+        print("   • Create a new knowledge base with a different name", file=sys.stderr)
+        print("   • Remove the existing knowledge base if you want to change models", file=sys.stderr)
+        print("💡 Check existing models: qdrant-ingest list", file=sys.stderr)
+        sys.exit(4)  # Model compatibility error
+    except (ConnectionError, OSError) as e:
+        print(f"❌ Connection error: {e}", file=sys.stderr)
+        print("💡 Network or connectivity issue:", file=sys.stderr)
+        print("   • Check your internet connection", file=sys.stderr)
+        print("   • Verify Qdrant server is accessible", file=sys.stderr)
+        print("   • Check firewall and proxy settings", file=sys.stderr)
+        print("💡 For local Qdrant: ensure Docker container is running", file=sys.stderr)
+        sys.exit(5)  # Connection error
+    except PermissionError as e:
+        print(f"❌ Permission error: {e}", file=sys.stderr)
+        print("💡 File or directory access issue:", file=sys.stderr)
+        print("   • Check file and directory permissions", file=sys.stderr)
+        print("   • Ensure you have read access to the specified path", file=sys.stderr)
+        print("   • Try running with appropriate user permissions", file=sys.stderr)
+        sys.exit(6)  # Permission error
+    except FileNotFoundError as e:
+        print(f"❌ File not found: {e}", file=sys.stderr)
+        print("💡 Path or file issue:", file=sys.stderr)
+        print("   • Check that the specified path exists", file=sys.stderr)
+        print("   • Use absolute paths to avoid confusion", file=sys.stderr)
+        print("   • Verify spelling and case sensitivity", file=sys.stderr)
+        sys.exit(7)  # File not found error
     except Exception as e:
         print(f"❌ Unexpected error: {e}", file=sys.stderr)
+        print("💡 This is an unexpected error. Please:", file=sys.stderr)
+        print("   • Check that all dependencies are installed correctly", file=sys.stderr)
+        print("   • Try running with --verbose for more details", file=sys.stderr)
+        print("   • Set DEBUG=1 environment variable for full stack trace", file=sys.stderr)
+        print("   • Report this issue if it persists", file=sys.stderr)
         if os.getenv("DEBUG"):
             import traceback
+            print("\n🔍 Full stack trace:", file=sys.stderr)
             traceback.print_exc()
         sys.exit(1)  # General error
 

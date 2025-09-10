@@ -30,6 +30,17 @@ from .settings import QdrantSettings, EmbeddingProviderSettings
 from .qdrant import Entry, QdrantConnector
 from .embeddings.factory import create_embedding_provider
 from .embeddings.base import EmbeddingProvider
+from .common.exceptions import (
+    MCPQdrantError,
+    ModelValidationError,
+    VectorDimensionMismatchError,
+    ChunkingError,
+    ConfigurationValidationError,
+    CollectionAccessError,
+    TokenizerError,
+    SentenceSplitterError,
+    BackwardCompatibilityError,
+)
 
 
 @dataclass
@@ -1797,6 +1808,7 @@ class BaseOperation(ABC):
             verbose=config.cli_settings.verbose,
             batch_size=config.cli_settings.batch_size
         )
+        self.error_handler = CLIErrorHandler(self.progress_reporter)
 
     @abstractmethod
     async def execute(self) -> OperationResult:
@@ -1820,34 +1832,70 @@ class BaseOperation(ABC):
 
     async def get_connector(self) -> QdrantConnector:
         """
-        Get or create a QdrantConnector instance.
+        Get or create a QdrantConnector instance with comprehensive error handling.
         
         Returns:
             Configured QdrantConnector instance
             
         Raises:
-            ValueError: If connector cannot be created
+            ValueError: If connector cannot be created after retries
         """
         if self._connector is None:
             try:
-                # Create embedding provider
-                self._embedding_provider = create_embedding_provider(self.config.embedding_settings)
+                # Create embedding provider with error handling
+                if self._embedding_provider is None:
+                    try:
+                        self._embedding_provider = create_embedding_provider(self.config.embedding_settings)
+                    except Exception as e:
+                        if not self.error_handler.handle_embedding_error(e, self.config.embedding_settings.model_name):
+                            raise ValueError(f"Failed to create embedding provider: {e}") from e
                 
-                # Create connector with chunking configuration
-                self._connector = QdrantConnector(
-                    qdrant_url=self.config.qdrant_settings.location,
-                    qdrant_api_key=self.config.qdrant_settings.api_key,
-                    collection_name=self.config.knowledgebase_name or "default",
-                    embedding_provider=self._embedding_provider,
-                    qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None),
-                    enable_chunking=self.config.embedding_settings.enable_chunking,
-                    max_chunk_size=self.config.embedding_settings.max_chunk_size,
-                    chunk_overlap=self.config.embedding_settings.chunk_overlap,
-                    chunk_strategy=self.config.embedding_settings.chunk_strategy
-                )
+                # Create connector with retry logic for connection errors
+                max_attempts = 3
+                last_error = None
+                
+                for attempt in range(max_attempts):
+                    try:
+                        self._connector = QdrantConnector(
+                            qdrant_url=self.config.qdrant_settings.location,
+                            qdrant_api_key=self.config.qdrant_settings.api_key,
+                            collection_name=self.config.knowledgebase_name or "default",
+                            embedding_provider=self._embedding_provider,
+                            qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None),
+                            enable_chunking=self.config.embedding_settings.enable_chunking,
+                            max_chunk_size=self.config.embedding_settings.max_chunk_size,
+                            chunk_overlap=self.config.embedding_settings.chunk_overlap,
+                            chunk_strategy=self.config.embedding_settings.chunk_strategy
+                        )
+                        break  # Success, exit retry loop
+                        
+                    except Exception as e:
+                        last_error = e
+                        
+                        # Handle connection errors with retry logic
+                        if attempt < max_attempts - 1:  # Not the last attempt
+                            if self.error_handler.handle_connection_error(
+                                e, self.config.qdrant_settings.location, f"creating connector (attempt {attempt + 1})"
+                            ):
+                                continue  # Retry
+                            else:
+                                break  # Error handler says don't retry
+                        else:
+                            # Last attempt, handle error without retry
+                            self.error_handler.handle_connection_error(
+                                e, self.config.qdrant_settings.location, "creating connector (final attempt)"
+                            )
+                
+                # If we still don't have a connector, raise the last error
+                if self._connector is None and last_error:
+                    raise ValueError(f"Failed to create Qdrant connector after {max_attempts} attempts: {last_error}") from last_error
                 
             except Exception as e:
-                raise ValueError(f"Failed to create Qdrant connector: {e}") from e
+                # Handle any other unexpected errors
+                if not isinstance(e, ValueError):  # Don't double-wrap ValueError
+                    self.error_handler.handle_unknown_error(e, "connector creation")
+                    raise ValueError(f"Failed to create Qdrant connector: {e}") from e
+                raise
         
         return self._connector
 
@@ -2041,9 +2089,19 @@ class IngestOperation(BaseOperation):
                             result.chunks_created += estimated_chunks
                             batch_success += 1
                         except Exception as e:
-                            error_msg = f"Failed to store entry: {e}"
-                            result.errors.append(error_msg)
-                            batch_errors += 1
+                            # Use error handler for storage errors
+                            entry_info = f"entry from {getattr(entry, 'metadata', {}).get('file_path', 'unknown file')}"
+                            if self.error_handler.handle_storage_error(e, entry_info, self.config.knowledgebase_name):
+                                error_msg = f"Failed to store entry: {e}"
+                                result.errors.append(error_msg)
+                                batch_errors += 1
+                            else:
+                                # Fatal storage error, stop processing
+                                error_msg = f"Fatal storage error: {e}"
+                                result.errors.append(error_msg)
+                                result.success = False
+                                self.progress_reporter.finish_operation(result)
+                                return result
                     
                     # Report batch progress
                     if self.progress_reporter.show_progress and len(processed_entries) > batch_size:
@@ -2061,9 +2119,17 @@ class IngestOperation(BaseOperation):
             return result
             
         except Exception as e:
+            # Handle unexpected errors with error handler
+            self.error_handler.handle_unknown_error(e, "ingestion operation")
             error_msg = f"Ingestion failed: {e}"
             result.errors.append(error_msg)
             self._log_error(error_msg)
+            
+            # Add error summary to result
+            error_summary = self.error_handler.get_error_summary()
+            if error_summary['recommendations']:
+                result.warnings.extend([f"Recommendation: {rec}" for rec in error_summary['recommendations']])
+            
             self.progress_reporter.finish_operation(result)
             return result
 
@@ -2568,6 +2634,441 @@ class ListOperation(BaseOperation):
             errors.append("Qdrant URL is required")
         
         return errors
+
+
+class CLIErrorHandler:
+    """
+    Centralized error handling for CLI operations.
+    
+    This class provides comprehensive error handling with:
+    - Graceful error handling for file processing failures
+    - Connection error handling with clear user messages
+    - Error recovery mechanisms for transient failures
+    - Categorized error reporting with actionable suggestions
+    """
+    
+    def __init__(self, progress_reporter: Optional[ProgressReporter] = None):
+        """
+        Initialize error handler.
+        
+        Args:
+            progress_reporter: Optional progress reporter for error logging
+        """
+        self.progress_reporter = progress_reporter
+        self.error_counts = {
+            'configuration': 0,
+            'connection': 0,
+            'file_processing': 0,
+            'storage': 0,
+            'validation': 0,
+            'transient': 0,
+            'unknown': 0
+        }
+        self.recovery_attempts = {}
+        self.max_retry_attempts = 3
+        self.retry_delay = 1.0  # seconds
+    
+    def handle_configuration_error(self, error: Exception, context: Optional[str] = None) -> bool:
+        """
+        Handle configuration-related errors.
+        
+        Args:
+            error: The configuration error
+            context: Additional context about where the error occurred
+            
+        Returns:
+            True if error was handled gracefully, False if fatal
+        """
+        self.error_counts['configuration'] += 1
+        
+        if isinstance(error, ConfigurationValidationError):
+            self._log_error(f"Configuration Error: {error.message}")
+            if error.suggested_value:
+                self._log_info(f"💡 Suggestion: Use {error.suggested_value}")
+            if error.valid_options:
+                self._log_info(f"Valid options: {', '.join(map(str, error.valid_options))}")
+            return False  # Configuration errors are usually fatal
+        
+        elif isinstance(error, ValidationError):
+            self._log_error(f"Configuration Validation Error: {str(error)}")
+            self._log_info("💡 Check your command line arguments and environment variables")
+            return False
+        
+        elif isinstance(error, ValueError) and "path" in str(error).lower():
+            self._log_error(f"Path Error: {str(error)}")
+            self._log_info("💡 Ensure the specified path exists and is accessible")
+            return False
+        
+        else:
+            self._log_error(f"Configuration Error: {str(error)}")
+            if context:
+                self._log_info(f"Context: {context}")
+            self._log_info("💡 Check your configuration settings and try again")
+            return False
+    
+    def handle_connection_error(self, error: Exception, qdrant_url: str, context: Optional[str] = None) -> bool:
+        """
+        Handle Qdrant connection errors with retry logic.
+        
+        Args:
+            error: The connection error
+            qdrant_url: The Qdrant URL that failed
+            context: Additional context about the operation
+            
+        Returns:
+            True if error was handled and retry is possible, False if fatal
+        """
+        self.error_counts['connection'] += 1
+        error_key = f"connection_{qdrant_url}"
+        
+        # Check if we should retry
+        retry_count = self.recovery_attempts.get(error_key, 0)
+        if retry_count >= self.max_retry_attempts:
+            self._log_error(f"Connection failed after {self.max_retry_attempts} attempts: {str(error)}")
+            self._provide_connection_troubleshooting(qdrant_url, error)
+            return False
+        
+        # Log the error with retry information
+        if retry_count == 0:
+            self._log_error(f"Connection Error: Failed to connect to Qdrant at {qdrant_url}")
+            self._log_error(f"Error details: {str(error)}")
+        else:
+            self._log_warning(f"Connection retry {retry_count + 1}/{self.max_retry_attempts} failed: {str(error)}")
+        
+        # Increment retry count
+        self.recovery_attempts[error_key] = retry_count + 1
+        
+        # Provide context-specific guidance
+        if context:
+            self._log_info(f"Context: {context}")
+        
+        # Check for specific error types
+        if "connection refused" in str(error).lower():
+            self._log_info("💡 Qdrant server may not be running. Check if the server is started.")
+        elif "timeout" in str(error).lower():
+            self._log_info("💡 Connection timeout. Check network connectivity and server load.")
+        elif "authentication" in str(error).lower() or "unauthorized" in str(error).lower():
+            self._log_info("💡 Authentication failed. Check your API key.")
+        elif "not found" in str(error).lower():
+            self._log_info("💡 Server not found. Check the URL and port number.")
+        
+        # Wait before retry
+        if retry_count < self.max_retry_attempts - 1:
+            import time
+            self._log_info(f"⏳ Retrying in {self.retry_delay} seconds...")
+            time.sleep(self.retry_delay)
+            return True  # Indicate retry is possible
+        
+        return False
+    
+    def handle_file_processing_error(
+        self, 
+        error: Exception, 
+        file_path: Path, 
+        operation: str = "processing"
+    ) -> bool:
+        """
+        Handle file processing errors with recovery strategies.
+        
+        Args:
+            error: The file processing error
+            file_path: Path of the file that failed
+            operation: The operation that failed (e.g., "reading", "processing")
+            
+        Returns:
+            True if error was handled and processing can continue, False if fatal
+        """
+        self.error_counts['file_processing'] += 1
+        
+        # Log the error
+        self._log_error(f"File {operation} failed for {file_path}: {str(error)}")
+        
+        # Handle specific error types
+        if isinstance(error, PermissionError):
+            self._log_warning(f"⚠️  Permission denied: {file_path}")
+            self._log_info("💡 Check file permissions or run with appropriate privileges")
+            return True  # Continue with other files
+        
+        elif isinstance(error, FileNotFoundError):
+            self._log_warning(f"⚠️  File not found: {file_path}")
+            self._log_info("💡 File may have been moved or deleted during processing")
+            return True  # Continue with other files
+        
+        elif isinstance(error, UnicodeDecodeError):
+            self._log_warning(f"⚠️  Encoding error: {file_path}")
+            self._log_info("💡 File may be binary or use an unsupported encoding")
+            return True  # Continue with other files
+        
+        elif isinstance(error, OSError) and "too large" in str(error).lower():
+            self._log_warning(f"⚠️  File too large: {file_path}")
+            self._log_info("💡 Consider increasing max file size or excluding large files")
+            return True  # Continue with other files
+        
+        elif isinstance(error, ValueError) and "empty" in str(error).lower():
+            self._log_warning(f"⚠️  Empty file skipped: {file_path}")
+            return True  # Continue with other files
+        
+        else:
+            # Unknown file processing error
+            self._log_warning(f"⚠️  Unexpected error processing {file_path}: {str(error)}")
+            self._log_info("💡 File will be skipped, processing continues with remaining files")
+            return True  # Continue with other files
+    
+    def handle_storage_error(
+        self, 
+        error: Exception, 
+        entry_info: str, 
+        collection_name: str,
+        retry_possible: bool = True
+    ) -> bool:
+        """
+        Handle storage errors with retry logic and recovery strategies.
+        
+        Args:
+            error: The storage error
+            entry_info: Information about the entry that failed to store
+            collection_name: Name of the collection
+            retry_possible: Whether retry is possible for this error
+            
+        Returns:
+            True if error was handled and retry is possible, False if fatal
+        """
+        self.error_counts['storage'] += 1
+        error_key = f"storage_{collection_name}_{entry_info}"
+        
+        # Handle specific MCP Qdrant errors
+        if isinstance(error, VectorDimensionMismatchError):
+            self._log_error(f"Vector Dimension Mismatch: {error.message}")
+            self._log_info("💡 Solutions:")
+            for suggestion in error.details.get('resolution_suggestions', []):
+                self._log_info(f"   • {suggestion}")
+            return False  # Dimension mismatches are fatal
+        
+        elif isinstance(error, CollectionAccessError):
+            self._log_error(f"Collection Access Error: {error.message}")
+            if error.available_collections:
+                self._log_info(f"Available collections: {', '.join(error.available_collections)}")
+            return False  # Collection access errors are usually fatal
+        
+        elif isinstance(error, ChunkingError):
+            self._log_warning(f"Chunking Error: {error.message}")
+            if error.fallback_used:
+                self._log_info("✅ Fallback strategy applied, continuing...")
+                return True  # Chunking errors with fallback can continue
+            else:
+                self._log_info("💡 Consider adjusting chunking parameters")
+                return True  # Skip this entry but continue
+        
+        # Handle retry logic for transient errors
+        if retry_possible:
+            retry_count = self.recovery_attempts.get(error_key, 0)
+            if retry_count >= self.max_retry_attempts:
+                self._log_error(f"Storage failed after {self.max_retry_attempts} attempts: {entry_info}")
+                return False
+            
+            # Check for transient error patterns
+            error_str = str(error).lower()
+            if any(pattern in error_str for pattern in ['timeout', 'connection', 'temporary', 'retry']):
+                self.error_counts['transient'] += 1
+                self.recovery_attempts[error_key] = retry_count + 1
+                
+                self._log_warning(f"Transient storage error (attempt {retry_count + 1}/{self.max_retry_attempts}): {str(error)}")
+                self._log_info("⏳ Will retry after brief delay...")
+                
+                import time
+                time.sleep(self.retry_delay * (retry_count + 1))  # Exponential backoff
+                return True
+        
+        # Log non-retryable storage error
+        self._log_error(f"Storage Error: {str(error)}")
+        self._log_info(f"Entry will be skipped: {entry_info}")
+        return True  # Continue with other entries
+    
+    def handle_validation_error(self, error: Exception, context: str) -> bool:
+        """
+        Handle validation errors with helpful suggestions.
+        
+        Args:
+            error: The validation error
+            context: Context where validation failed
+            
+        Returns:
+            True if error was handled gracefully, False if fatal
+        """
+        self.error_counts['validation'] += 1
+        
+        if isinstance(error, ModelValidationError):
+            self._log_error(f"Model Validation Error: {error.message}")
+            if error.available_models:
+                self._log_info("Available models:")
+                for model in error.available_models[:10]:  # Show first 10
+                    self._log_info(f"   • {model}")
+                if len(error.available_models) > 10:
+                    self._log_info(f"   ... and {len(error.available_models) - 10} more")
+            return False  # Model validation errors are fatal
+        
+        elif isinstance(error, re.error):
+            self._log_error(f"Regex Pattern Error in {context}: {str(error)}")
+            self._log_info("💡 Check your include/exclude patterns for valid regex syntax")
+            return False  # Regex errors are fatal
+        
+        else:
+            self._log_error(f"Validation Error in {context}: {str(error)}")
+            return False  # Most validation errors are fatal
+    
+    def handle_embedding_error(self, error: Exception, model_name: str) -> bool:
+        """
+        Handle embedding-related errors with model fallback strategies.
+        
+        Args:
+            error: The embedding error
+            model_name: Name of the embedding model that failed
+            
+        Returns:
+            True if fallback is possible, False if fatal
+        """
+        self.error_counts['unknown'] += 1  # Will be recategorized if needed
+        
+        if isinstance(error, ModelValidationError):
+            return self.handle_validation_error(error, f"embedding model '{model_name}'")
+        
+        elif "not found" in str(error).lower() or "not available" in str(error).lower():
+            self._log_error(f"Embedding model '{model_name}' not found or not available")
+            self._log_info("💡 Try installing the model or using a different model")
+            self._log_info("💡 Use 'qdrant-ingest list-models' to see available models")
+            return False
+        
+        elif "download" in str(error).lower() or "network" in str(error).lower():
+            self._log_error(f"Failed to download embedding model '{model_name}': {str(error)}")
+            self._log_info("💡 Check your internet connection and try again")
+            self._log_info("💡 Model will be downloaded on first use")
+            return False
+        
+        else:
+            self._log_error(f"Embedding Error with model '{model_name}': {str(error)}")
+            return False
+    
+    def handle_unknown_error(self, error: Exception, context: str) -> bool:
+        """
+        Handle unknown/unexpected errors with generic recovery strategies.
+        
+        Args:
+            error: The unknown error
+            context: Context where the error occurred
+            
+        Returns:
+            True if processing can continue, False if fatal
+        """
+        self.error_counts['unknown'] += 1
+        
+        self._log_error(f"Unexpected Error in {context}: {str(error)}")
+        self._log_error(f"Error type: {type(error).__name__}")
+        
+        # Provide generic troubleshooting advice
+        self._log_info("💡 Troubleshooting suggestions:")
+        self._log_info("   • Check your configuration settings")
+        self._log_info("   • Verify network connectivity")
+        self._log_info("   • Try running with --verbose for more details")
+        self._log_info("   • Consider using --dry-run to test configuration")
+        
+        # For unknown errors, be conservative and suggest stopping
+        return False
+    
+    def should_continue_processing(self) -> bool:
+        """
+        Determine if processing should continue based on error patterns.
+        
+        Returns:
+            True if processing should continue, False if too many errors
+        """
+        total_errors = sum(self.error_counts.values())
+        
+        # Stop if too many configuration or connection errors
+        if self.error_counts['configuration'] > 0 or self.error_counts['connection'] > 5:
+            return False
+        
+        # Stop if too many unknown errors
+        if self.error_counts['unknown'] > 10:
+            self._log_error("Too many unknown errors encountered, stopping processing")
+            return False
+        
+        # Continue if mostly file processing errors (these are expected)
+        return True
+    
+    def get_error_summary(self) -> dict:
+        """
+        Get a summary of all errors encountered.
+        
+        Returns:
+            Dictionary with error statistics and recommendations
+        """
+        total_errors = sum(self.error_counts.values())
+        
+        summary = {
+            'total_errors': total_errors,
+            'error_counts': self.error_counts.copy(),
+            'retry_attempts': len(self.recovery_attempts),
+            'recommendations': []
+        }
+        
+        # Add recommendations based on error patterns
+        if self.error_counts['configuration'] > 0:
+            summary['recommendations'].append("Review configuration settings and command line arguments")
+        
+        if self.error_counts['connection'] > 0:
+            summary['recommendations'].append("Check Qdrant server status and network connectivity")
+        
+        if self.error_counts['file_processing'] > 5:
+            summary['recommendations'].append("Consider adjusting file filters or checking file permissions")
+        
+        if self.error_counts['storage'] > 0:
+            summary['recommendations'].append("Verify Qdrant collection configuration and available space")
+        
+        if self.error_counts['transient'] > 0:
+            summary['recommendations'].append("Transient errors occurred - consider retrying the operation")
+        
+        return summary
+    
+    def _provide_connection_troubleshooting(self, qdrant_url: str, error: Exception) -> None:
+        """
+        Provide detailed connection troubleshooting guidance.
+        
+        Args:
+            qdrant_url: The Qdrant URL that failed
+            error: The connection error
+        """
+        self._log_info("🔧 Connection Troubleshooting:")
+        self._log_info(f"   • Verify Qdrant server is running at {qdrant_url}")
+        self._log_info("   • Check if the port is correct (default: 6333)")
+        self._log_info("   • Verify network connectivity and firewall settings")
+        
+        if "localhost" in qdrant_url or "127.0.0.1" in qdrant_url:
+            self._log_info("   • For local Qdrant: docker run -p 6333:6333 qdrant/qdrant")
+        else:
+            self._log_info("   • For remote Qdrant: check API key and URL format")
+        
+        self._log_info("   • Test connection: curl http://localhost:6333/health")
+    
+    def _log_error(self, message: str) -> None:
+        """Log an error message."""
+        if self.progress_reporter:
+            self.progress_reporter.log_error(message)
+        else:
+            print(f"❌ {message}", file=sys.stderr)
+    
+    def _log_warning(self, message: str) -> None:
+        """Log a warning message."""
+        if self.progress_reporter:
+            self.progress_reporter.log_warning(message)
+        else:
+            print(f"⚠️  {message}")
+    
+    def _log_info(self, message: str) -> None:
+        """Log an info message."""
+        if self.progress_reporter:
+            self.progress_reporter.log_info(message)
+        else:
+            print(f"ℹ️  {message}")
 
 
 class FileProcessor(ABC):

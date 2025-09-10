@@ -3765,20 +3765,119 @@ def parse_and_validate_args(args: Optional[List[str]] = None) -> IngestConfig:
 
 
 async def main_async():
-    """Async main entry point for the CLI tool."""
+    """
+    Async main entry point for the CLI tool.
+    
+    This function handles:
+    - Command routing based on operation mode
+    - Operation result aggregation and display
+    - Error handling and user feedback
+    - Exit code management
+    """
     try:
+        # Parse and validate configuration
         config = await parse_and_validate_args_intelligent()
-        print(f"Configuration built successfully for command: {config.cli_settings.operation_mode}")
-        print(f"Target path: {config.target_path}")
-        print(f"Knowledgebase: {config.knowledgebase_name}")
-        print(f"Embedding model: {config.embedding_settings.model_name}")
-        # Actual operation execution will be implemented in later tasks
+        
+        # Create progress reporter
+        progress_reporter = ProgressReporter(
+            show_progress=config.cli_settings.show_progress,
+            verbose=config.cli_settings.verbose,
+            batch_size=config.cli_settings.batch_size
+        )
+        
+        # Show configuration summary if verbose
+        if config.cli_settings.verbose:
+            progress_reporter.log_info("Configuration Summary:")
+            settings_summary = config.get_effective_settings_summary()
+            for key, value in settings_summary.items():
+                if value is not None:
+                    progress_reporter._log_verbose(f"  {key}: {value}")
+        
+        # Route to appropriate operation
+        operation = await _create_operation(config, progress_reporter)
+        
+        # Execute operation
+        result = await operation.execute()
+        
+        # Display final results and determine exit code
+        exit_code = _handle_operation_result(result, progress_reporter)
+        sys.exit(exit_code)
+        
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user", file=sys.stderr)
-        sys.exit(1)
+        print("\n🚫 Operation cancelled by user", file=sys.stderr)
+        sys.exit(130)  # Standard exit code for SIGINT
+    except ConfigurationValidationError as e:
+        print(f"❌ Configuration error: {e}", file=sys.stderr)
+        sys.exit(2)  # Configuration error
+    except MCPQdrantError as e:
+        print(f"❌ Qdrant error: {e}", file=sys.stderr)
+        sys.exit(3)  # Qdrant-specific error
     except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        sys.exit(1)
+        print(f"❌ Unexpected error: {e}", file=sys.stderr)
+        if os.getenv("DEBUG"):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)  # General error
+
+
+async def _create_operation(config: IngestConfig, progress_reporter: ProgressReporter):
+    """
+    Create the appropriate operation instance based on configuration.
+    
+    Args:
+        config: Complete CLI configuration
+        progress_reporter: Progress reporter instance (for main-level reporting)
+        
+    Returns:
+        Operation instance ready for execution
+        
+    Raises:
+        ValueError: If operation mode is not supported
+    """
+    operation_mode = config.cli_settings.operation_mode
+    
+    if operation_mode == "ingest":
+        return IngestOperation(config)
+    elif operation_mode == "update":
+        return UpdateOperation(config)
+    elif operation_mode == "remove":
+        return RemoveOperation(config)
+    elif operation_mode == "list":
+        return ListOperation(config)
+    else:
+        raise ValueError(f"Unsupported operation mode: {operation_mode}")
+
+
+def _handle_operation_result(result: OperationResult, progress_reporter: ProgressReporter) -> int:
+    """
+    Handle operation result and determine appropriate exit code.
+    
+    Args:
+        result: Operation result with statistics and status
+        progress_reporter: Progress reporter for final messages
+        
+    Returns:
+        Exit code (0 for success, non-zero for various error conditions)
+    """
+    if result.success:
+        if result.files_failed == 0 and len(result.errors) == 0:
+            # Complete success
+            progress_reporter.log_success("Operation completed successfully!")
+            return 0
+        else:
+            # Partial success - some files failed but operation didn't abort
+            progress_reporter.log_warning("Operation completed with some failures")
+            return 1
+    else:
+        # Operation failed
+        if result.files_processed == 0 and result.total_files > 0:
+            # Complete failure - no files processed
+            progress_reporter.log_error("Operation failed - no files were processed")
+            return 4
+        else:
+            # Partial failure - some files processed but operation failed overall
+            progress_reporter.log_error("Operation failed with partial results")
+            return 5
 
 
 def main():

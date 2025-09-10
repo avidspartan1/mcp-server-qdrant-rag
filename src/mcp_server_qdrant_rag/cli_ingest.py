@@ -1026,7 +1026,8 @@ class EmbeddingModelIntelligence:
         """
         try:
             # Create a temporary connector to check collection
-            temp_embedding_settings = EmbeddingProviderSettings(model_name=self.DEFAULT_MODEL)
+            temp_embedding_settings = EmbeddingProviderSettings()
+            temp_embedding_settings.model_name = self.DEFAULT_MODEL
             temp_provider = create_embedding_provider(temp_embedding_settings)
             
             connector = QdrantConnector(
@@ -1194,7 +1195,8 @@ class EmbeddingModelIntelligence:
         """
         try:
             # Create embedding settings and provider
-            embedding_settings = EmbeddingProviderSettings(model_name=model_name)
+            embedding_settings = EmbeddingProviderSettings()
+            embedding_settings.model_name = model_name
             provider = create_embedding_provider(embedding_settings)
             
             # Get model information
@@ -1241,7 +1243,8 @@ class EmbeddingModelIntelligence:
         
         # Check collection compatibility
         try:
-            embedding_settings = EmbeddingProviderSettings(model_name=model_name)
+            embedding_settings = EmbeddingProviderSettings()
+            embedding_settings.model_name = model_name
             provider = create_embedding_provider(embedding_settings)
             
             connector = QdrantConnector(
@@ -1431,13 +1434,17 @@ class BaseOperation(ABC):
                 # Create embedding provider
                 self._embedding_provider = create_embedding_provider(self.config.embedding_settings)
                 
-                # Create connector
+                # Create connector with chunking configuration
                 self._connector = QdrantConnector(
                     qdrant_url=self.config.qdrant_settings.location,
                     qdrant_api_key=self.config.qdrant_settings.api_key,
                     collection_name=self.config.knowledgebase_name or "default",
                     embedding_provider=self._embedding_provider,
-                    qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None)
+                    qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None),
+                    enable_chunking=self.config.embedding_settings.enable_chunking,
+                    max_chunk_size=self.config.embedding_settings.max_chunk_size,
+                    chunk_overlap=self.config.embedding_settings.chunk_overlap,
+                    chunk_strategy=self.config.embedding_settings.chunk_strategy
                 )
                 
             except Exception as e:
@@ -1609,7 +1616,7 @@ class IngestOperation(BaseOperation):
                 # Store entries and get chunk count
                 for entry in processed_entries:
                     try:
-                        await connector.store_entry(entry)
+                        await connector.store(entry, collection_name=self.config.knowledgebase_name)
                         # Estimate chunks created (actual chunking happens in QdrantConnector)
                         estimated_chunks = max(1, len(entry.content) // 1000)  # Rough estimate
                         result.chunks_created += estimated_chunks
@@ -1723,8 +1730,8 @@ class UpdateOperation(BaseOperation):
                 
                 connector = await self.get_connector()
                 try:
-                    await connector.clear_collection()
-                    self._log_info("Existing collection cleared")
+                    cleared_count = await connector.clear_collection(self.config.knowledgebase_name)
+                    self._log_info(f"Existing collection cleared ({cleared_count} points removed)")
                 except Exception as e:
                     result.errors.append(f"Failed to clear collection: {e}")
                     self._log_error(f"Failed to clear collection: {e}")
@@ -1789,7 +1796,7 @@ class UpdateOperation(BaseOperation):
                 
                 for entry in processed_entries:
                     try:
-                        await connector.store_entry(entry)
+                        await connector.store(entry, collection_name=self.config.knowledgebase_name)
                         estimated_chunks = max(1, len(entry.content) // 1000)
                         result.chunks_created += estimated_chunks
                     except Exception as e:
@@ -1921,9 +1928,13 @@ class RemoveOperation(BaseOperation):
             # Delete collection
             connector = await self.get_connector()
             try:
-                await connector.delete_collection()
-                result.files_processed = 1  # Use this to indicate collection was deleted
-                self._log_success(f"Collection '{self.config.knowledgebase_name}' deleted successfully")
+                deleted = await connector.delete_collection(self.config.knowledgebase_name)
+                if deleted:
+                    result.files_processed = 1  # Use this to indicate collection was deleted
+                    self._log_success(f"Collection '{self.config.knowledgebase_name}' deleted successfully")
+                else:
+                    self._log_info(f"Collection '{self.config.knowledgebase_name}' was already deleted")
+                    result.success = True
             except Exception as e:
                 result.errors.append(f"Failed to delete collection: {e}")
                 self._log_error(f"Failed to delete collection: {e}")
@@ -1989,9 +2000,8 @@ class ListOperation(BaseOperation):
             self._log_info("Listing available knowledge bases...")
             
             # Get connector (we need a temporary one for listing)
-            temp_embedding_settings = EmbeddingProviderSettings(
-                model_name="nomic-ai/nomic-embed-text-v1.5-Q"
-            )
+            temp_embedding_settings = EmbeddingProviderSettings()
+            temp_embedding_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
             temp_provider = create_embedding_provider(temp_embedding_settings)
             
             temp_connector = QdrantConnector(
@@ -2019,27 +2029,36 @@ class ListOperation(BaseOperation):
             print()
             
             # Display collection information
-            embedding_intelligence = EmbeddingModelIntelligence(self.config.qdrant_settings)
-            
             for i, collection_name in enumerate(sorted(collection_names), 1):
                 print(f"{i}. {collection_name}")
                 
                 if self.config.cli_settings.verbose:
                     # Get detailed collection information
                     try:
-                        model_info = await embedding_intelligence.detect_collection_model(collection_name)
-                        if model_info:
-                            print(f"   Model: {model_info.collection_model or 'Unknown'}")
-                            print(f"   Dimensions: {model_info.collection_vector_size or 'Unknown'}")
-                            print(f"   Vector name: {model_info.collection_vector_name or 'Unknown'}")
+                        # Create a temporary connector for this specific collection
+                        collection_connector = QdrantConnector(
+                            qdrant_url=self.config.qdrant_settings.location,
+                            qdrant_api_key=self.config.qdrant_settings.api_key,
+                            collection_name=collection_name,
+                            embedding_provider=temp_provider,
+                            qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None)
+                        )
                         
                         # Get collection compatibility info
-                        compatibility_info = await temp_connector.check_collection_compatibility(collection_name)
+                        compatibility_info = await collection_connector.analyze_collection_compatibility(collection_name)
                         if compatibility_info.get("exists"):
-                            available_vectors = compatibility_info.get("available_vectors", {})
+                            points_count = compatibility_info.get("points_count", 0)
+                            print(f"   Points: {points_count}")
+                            
+                            available_vectors = compatibility_info.get("available_vectors", [])
                             if available_vectors:
-                                total_vectors = sum(available_vectors.values())
-                                print(f"   Vectors: {total_vectors}")
+                                print(f"   Vector names: {', '.join(available_vectors)}")
+                            
+                            expected_dimensions = compatibility_info.get("expected_dimensions", "Unknown")
+                            print(f"   Dimensions: {expected_dimensions}")
+                            
+                            current_model = compatibility_info.get("current_model", "Unknown")
+                            print(f"   Model: {current_model}")
                         
                     except Exception as e:
                         print(f"   Error getting details: {e}")

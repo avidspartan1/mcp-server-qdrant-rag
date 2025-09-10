@@ -588,6 +588,97 @@ class QdrantConnector:
             "vector_name": self._embedding_provider.get_vector_name(),
         }
 
+    async def delete_collection(self, collection_name: str | None = None) -> bool:
+        """
+        Delete a collection from Qdrant.
+        
+        :param collection_name: The name of the collection to delete, optional. If not provided,
+                                the default collection is used.
+        :return: True if collection was deleted, False if it didn't exist
+        :raises CollectionAccessError: If deletion fails due to server errors
+        """
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("Collection name is required for deletion")
+        
+        try:
+            collection_exists = await self._client.collection_exists(collection_name)
+            if not collection_exists:
+                logger.debug(f"Collection '{collection_name}' does not exist, nothing to delete")
+                return False
+            
+            await self._client.delete_collection(collection_name)
+            logger.info(f"Successfully deleted collection '{collection_name}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete collection '{collection_name}': {e}")
+            raise CollectionAccessError(
+                collection_name=collection_name,
+                operation="delete",
+                original_error=e,
+                available_collections=await self.get_collection_names()
+            ) from e
+
+    async def clear_collection(self, collection_name: str | None = None) -> int:
+        """
+        Clear all points from a collection while keeping the collection structure.
+        
+        :param collection_name: The name of the collection to clear, optional. If not provided,
+                                the default collection is used.
+        :return: Number of points that were deleted
+        :raises CollectionAccessError: If clearing fails due to server errors
+        """
+        collection_name = collection_name or self._default_collection_name
+        if not collection_name:
+            raise ValueError("Collection name is required for clearing")
+        
+        try:
+            collection_exists = await self._client.collection_exists(collection_name)
+            if not collection_exists:
+                logger.debug(f"Collection '{collection_name}' does not exist, nothing to clear")
+                return 0
+            
+            # Get collection info to know how many points we're deleting
+            collection_info = await self._client.get_collection(collection_name)
+            points_count = collection_info.points_count
+            
+            if points_count == 0:
+                logger.debug(f"Collection '{collection_name}' is already empty")
+                return 0
+            
+            # Delete all points by recreating the collection
+            # This is more efficient than deleting points individually
+            vectors_config = collection_info.config.params.vectors
+            
+            # Delete and recreate the collection
+            await self._client.delete_collection(collection_name)
+            await self._client.create_collection(
+                collection_name=collection_name,
+                vectors_config=vectors_config
+            )
+            
+            # Recreate payload indexes if they existed
+            if self._field_indexes:
+                for field_name, field_type in self._field_indexes.items():
+                    await self._client.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field_name,
+                        field_schema=field_type,
+                    )
+            
+            logger.info(f"Successfully cleared {points_count} points from collection '{collection_name}'")
+            return points_count
+            
+        except Exception as e:
+            logger.error(f"Failed to clear collection '{collection_name}': {e}")
+            raise CollectionAccessError(
+                collection_name=collection_name,
+                operation="clear",
+                original_error=e,
+                available_collections=await self.get_collection_names()
+            ) from e
+
     async def analyze_collection_compatibility(self, collection_name: str | None = None) -> dict[str, Any]:
         """
         Analyze collection compatibility for backward compatibility assessment.

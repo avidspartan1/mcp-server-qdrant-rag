@@ -5,8 +5,12 @@ WORKDIR /app
 # Install uv for package management
 RUN pip install --no-cache-dir uv
 
-# Install the mcp-server-qdrant-rag package
-RUN uv pip install --system --no-cache-dir mcp-server-qdrant-rag
+# Copy project files
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ ./src/
+
+# Install dependencies and the package
+RUN uv sync --frozen --no-dev
 
 # Expose the default port for SSE transport
 EXPOSE 8000
@@ -18,4 +22,4 @@ ENV COLLECTION_NAME="default-collection"
 ENV EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q"
 
 # Run the server with SSE transport
-CMD uvx mcp-server-qdrant-rag --transport sse
+CMD uv run mcp-server-qdrant-rag --transport sse

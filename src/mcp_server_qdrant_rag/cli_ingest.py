@@ -27,6 +27,7 @@ from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings
 
 from .settings import QdrantSettings, EmbeddingProviderSettings
+from .qdrant import Entry
 
 
 @dataclass
@@ -607,6 +608,361 @@ class FileDiscovery:
             'total_size': total_size,
             'estimated_tokens': estimated_tokens,
             'extensions': extensions,
+            'encodings': encodings
+        }
+
+
+class ContentProcessor:
+    """
+    Processes file content for ingestion into Qdrant.
+    
+    This class handles file reading, encoding detection, binary file detection,
+    and metadata extraction to convert FileInfo objects into Entry objects
+    suitable for storage in Qdrant collections.
+    """
+    
+    def __init__(self, max_file_size: int = 100 * 1024 * 1024):  # 100MB default
+        """
+        Initialize content processor.
+        
+        Args:
+            max_file_size: Maximum file size to process in bytes
+        """
+        self.max_file_size = max_file_size
+    
+    async def process_file(self, file_info: FileInfo) -> Optional[Entry]:
+        """
+        Process a single file into an Entry object.
+        
+        Args:
+            file_info: Information about the file to process
+            
+        Returns:
+            Entry object ready for storage, or None if file cannot be processed
+            
+        Raises:
+            ValueError: If file processing fails due to invalid data
+            OSError: If file cannot be read due to system errors
+        """
+        try:
+            # Skip binary files
+            if file_info.is_binary:
+                return None
+            
+            # Check file size limits
+            if file_info.size > self.max_file_size:
+                raise ValueError(f"File too large: {file_info.size} bytes (max: {self.max_file_size})")
+            
+            # Skip empty files
+            if file_info.size == 0:
+                return None
+            
+            # Read file content with encoding detection
+            content = await self._read_file_content(file_info)
+            if not content or not content.strip():
+                return None
+            
+            # Extract metadata
+            metadata = self._extract_metadata(file_info)
+            
+            # Create Entry object
+            entry = Entry(
+                content=content,
+                metadata=metadata,
+                is_chunk=False,  # Original files are not chunks
+                source_document_id=None,
+                chunk_index=None,
+                total_chunks=None
+            )
+            
+            return entry
+            
+        except Exception as e:
+            # Re-raise with context about which file failed
+            raise ValueError(f"Failed to process file {file_info.path}: {e}") from e
+    
+    async def _read_file_content(self, file_info: FileInfo) -> str:
+        """
+        Read file content with proper encoding handling.
+        
+        Args:
+            file_info: File information including detected encoding
+            
+        Returns:
+            File content as string
+            
+        Raises:
+            OSError: If file cannot be read
+            UnicodeDecodeError: If file cannot be decoded with any supported encoding
+        """
+        # Try the detected encoding first
+        encodings_to_try = [file_info.encoding]
+        
+        # Add fallback encodings if the detected one isn't UTF-8
+        if file_info.encoding != 'utf-8':
+            encodings_to_try.extend(['utf-8', 'latin-1', 'cp1252', 'iso-8859-1'])
+        else:
+            encodings_to_try.extend(['latin-1', 'cp1252', 'iso-8859-1'])
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_encodings = []
+        for enc in encodings_to_try:
+            if enc not in seen and enc != 'binary':
+                seen.add(enc)
+                unique_encodings.append(enc)
+        
+        last_error = None
+        for encoding in unique_encodings:
+            try:
+                with open(file_info.path, 'r', encoding=encoding, errors='replace') as f:
+                    content = f.read()
+                
+                # Validate that we got meaningful content
+                if content and not self._is_mostly_control_chars(content):
+                    return content
+                    
+            except (UnicodeDecodeError, OSError) as e:
+                last_error = e
+                continue
+        
+        # If all encodings failed, raise the last error
+        if last_error:
+            raise OSError(
+                f"Could not decode file with any supported encoding. Last error: {last_error}"
+            ) from last_error
+        
+        return ""
+    
+    def _is_mostly_control_chars(self, content: str, threshold: float = 0.3) -> bool:
+        """
+        Check if content consists mostly of control characters (likely binary).
+        
+        Args:
+            content: Content to check
+            threshold: Fraction of control characters that indicates binary content
+            
+        Returns:
+            True if content is likely binary, False otherwise
+        """
+        if not content:
+            return True
+        
+        control_chars = sum(1 for c in content if ord(c) < 32 and c not in '\t\n\r')
+        return (control_chars / len(content)) > threshold
+    
+    def _extract_metadata(self, file_info: FileInfo) -> dict[str, Any]:
+        """
+        Extract metadata from file information.
+        
+        Args:
+            file_info: File information to extract metadata from
+            
+        Returns:
+            Dictionary containing file metadata
+        """
+        metadata = {
+            # File identification
+            "file_path": str(file_info.path),
+            "file_name": file_info.path.name,
+            "file_extension": file_info.path.suffix.lower(),
+            "file_stem": file_info.path.stem,
+            
+            # File properties
+            "file_size": file_info.size,
+            "encoding": file_info.encoding,
+            "estimated_tokens": file_info.estimated_tokens,
+            
+            # Timestamps
+            "modified_time": file_info.modified_time.isoformat(),
+            "ingestion_time": datetime.now().isoformat(),
+            
+            # Source information
+            "source_type": "file_ingestion",
+            "ingestion_method": "cli_tool",
+            
+            # Directory information
+            "parent_directory": str(file_info.path.parent),
+            "relative_path": str(file_info.path),
+        }
+        
+        # Add file type classification
+        metadata["file_type"] = self._classify_file_type(file_info.path)
+        
+        # Add size category
+        metadata["size_category"] = self._categorize_file_size(file_info.size)
+        
+        return metadata
+    
+    def _classify_file_type(self, file_path: Path) -> str:
+        """
+        Classify file type based on extension.
+        
+        Args:
+            file_path: Path to classify
+            
+        Returns:
+            File type category
+        """
+        extension = file_path.suffix.lower()
+        
+        # Define file type mappings
+        type_mappings = {
+            # Documentation
+            '.md': 'markdown',
+            '.txt': 'text',
+            '.rst': 'restructuredtext',
+            '.rtf': 'rich_text',
+            
+            # Code files
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.tsx': 'typescript',
+            '.jsx': 'javascript',
+            '.java': 'java',
+            '.go': 'go',
+            '.rb': 'ruby',
+            '.php': 'php',
+            '.cpp': 'cpp',
+            '.c': 'c',
+            '.h': 'header',
+            '.hpp': 'cpp_header',
+            '.sh': 'shell',
+            '.bash': 'bash',
+            '.zsh': 'zsh',
+            '.fish': 'fish',
+            
+            # Configuration
+            '.json': 'json',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.toml': 'toml',
+            '.ini': 'ini',
+            '.cfg': 'config',
+            '.conf': 'config',
+            '.xml': 'xml',
+            
+            # Infrastructure
+            '.tf': 'terraform',
+            '.tftpl': 'terraform_template',
+            '.tpl': 'template',
+            '.dockerfile': 'dockerfile',
+            
+            # Web
+            '.html': 'html',
+            '.htm': 'html',
+            '.css': 'css',
+            '.scss': 'scss',
+            '.sass': 'sass',
+            '.less': 'less',
+            
+            # Data
+            '.sql': 'sql',
+            '.csv': 'csv',
+            '.tsv': 'tsv',
+            '.log': 'log',
+        }
+        
+        return type_mappings.get(extension, 'unknown')
+    
+    def _categorize_file_size(self, size: int) -> str:
+        """
+        Categorize file size for metadata.
+        
+        Args:
+            size: File size in bytes
+            
+        Returns:
+            Size category string
+        """
+        if size < 1024:  # < 1KB
+            return 'tiny'
+        elif size < 10 * 1024:  # < 10KB
+            return 'small'
+        elif size < 100 * 1024:  # < 100KB
+            return 'medium'
+        elif size < 1024 * 1024:  # < 1MB
+            return 'large'
+        else:  # >= 1MB
+            return 'very_large'
+    
+    def can_process_file(self, file_path: Path) -> bool:
+        """
+        Check if this processor can handle the given file.
+        
+        Args:
+            file_path: Path to check
+            
+        Returns:
+            True if file can be processed, False otherwise
+        """
+        try:
+            # Check if file exists and is readable
+            if not file_path.exists() or not file_path.is_file():
+                return False
+            
+            # Check file size
+            if file_path.stat().st_size > self.max_file_size:
+                return False
+            
+            # Check if it's a hidden file (skip by default)
+            if file_path.name.startswith('.'):
+                return False
+            
+            return True
+            
+        except (OSError, PermissionError):
+            return False
+    
+    def get_processing_stats(self, processed_entries: list[Entry]) -> dict[str, Any]:
+        """
+        Get statistics about processed entries.
+        
+        Args:
+            processed_entries: List of processed Entry objects
+            
+        Returns:
+            Dictionary with processing statistics
+        """
+        if not processed_entries:
+            return {
+                'total_entries': 0,
+                'total_content_length': 0,
+                'average_content_length': 0,
+                'file_types': {},
+                'size_categories': {},
+                'encodings': {}
+            }
+        
+        total_content_length = sum(len(entry.content) for entry in processed_entries)
+        average_content_length = total_content_length / len(processed_entries)
+        
+        # Analyze metadata
+        file_types = {}
+        size_categories = {}
+        encodings = {}
+        
+        for entry in processed_entries:
+            if entry.metadata:
+                # Count file types
+                file_type = entry.metadata.get('file_type', 'unknown')
+                file_types[file_type] = file_types.get(file_type, 0) + 1
+                
+                # Count size categories
+                size_cat = entry.metadata.get('size_category', 'unknown')
+                size_categories[size_cat] = size_categories.get(size_cat, 0) + 1
+                
+                # Count encodings
+                encoding = entry.metadata.get('encoding', 'unknown')
+                encodings[encoding] = encodings.get(encoding, 0) + 1
+        
+        return {
+            'total_entries': len(processed_entries),
+            'total_content_length': total_content_length,
+            'average_content_length': average_content_length,
+            'file_types': file_types,
+            'size_categories': size_categories,
             'encodings': encodings
         }
 

@@ -1,0 +1,1 @@
+"""Test fixtures for CLI file ingestion tests."""

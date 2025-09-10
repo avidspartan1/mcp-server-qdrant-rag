@@ -1,4 +1,6 @@
 import argparse
+import signal
+import sys
 
 
 def main():
@@ -17,8 +19,25 @@ def main():
     )
     args = parser.parse_args()
 
-    # Import is done here to make sure environment variables are loaded
-    # only after we make the changes.
-    from mcp_server_qdrant_rag.server import mcp
+    # Set up signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        """Handle SIGINT (Ctrl+C) and SIGTERM gracefully."""
+        print("\nReceived interrupt signal. Shutting down gracefully...", file=sys.stderr)
+        sys.exit(0)
 
-    mcp.run(transport=args.transport)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        # Import is done here to make sure environment variables are loaded
+        # only after we make the changes.
+        from mcp_server_qdrant_rag.server import mcp
+
+        mcp.run(transport=args.transport)
+    except KeyboardInterrupt:
+        # Additional fallback for KeyboardInterrupt
+        print("\nShutdown complete.", file=sys.stderr)
+        sys.exit(0)
+    except Exception as e:
+        print(f"Server error: {e}", file=sys.stderr)
+        sys.exit(1)

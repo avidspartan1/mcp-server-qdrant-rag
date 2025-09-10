@@ -475,6 +475,16 @@ else:
 
 If NLTK data download fails completely, the system will automatically fall back to alternative sentence splitters (syntok or simple regex-based splitting), so functionality is maintained.
 
+### Graceful Shutdown
+
+The server includes proper signal handling for graceful shutdown. When using stdio transport, you can cleanly exit with Ctrl+C (SIGINT) or SIGTERM. The server will:
+
+- Catch the interrupt signal
+- Print a shutdown message
+- Exit cleanly without hanging
+
+This is particularly important when running with `uvx` or in containerized environments.
+
 ## Support for other tools
 
 This MCP server can be used with any MCP-compatible client. For example, you can use it with

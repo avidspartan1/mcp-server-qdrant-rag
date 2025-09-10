@@ -3322,8 +3322,8 @@ class CLIValidator:
         elif not (path.is_file() or path.is_dir()):
             errors.append(f"Path must be a file or directory: {args.path}")
 
-        # Validate knowledgebase name derivation
-        if path.exists():
+        # Validate knowledgebase name derivation only if not explicitly provided
+        if path.exists() and not args.knowledgebase:
             try:
                 derived_name = self._derive_knowledgebase_name(path)
                 if not derived_name or not derived_name.strip():
@@ -3333,6 +3333,11 @@ class CLIValidator:
                     )
             except Exception as e:
                 errors.append(f"Error deriving knowledgebase name: {e}")
+        elif args.knowledgebase and not self._is_valid_knowledgebase_name(args.knowledgebase):
+            errors.append(
+                f"Invalid knowledgebase name: {args.knowledgebase}. "
+                "Name must contain only alphanumeric characters, hyphens, and underscores."
+            )
 
         return errors
 

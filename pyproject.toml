@@ -33,6 +33,7 @@ dev-dependencies = [
 
 [project.scripts]
 mcp-server-qdrant-rag = "mcp_server_qdrant_rag.main:main"
+qdrant-ingest = "mcp_server_qdrant_rag.cli_ingest:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

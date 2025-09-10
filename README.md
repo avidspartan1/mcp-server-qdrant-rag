@@ -199,6 +199,62 @@ For the time being, only [FastEmbed](https://qdrant.github.io/fastembed/) models
 
 The server automatically detects vector dimensions based on the selected embedding model and supports intelligent document chunking for improved retrieval performance with large documents.
 
+## CLI Tool: qdrant-ingest
+
+The package includes a powerful CLI tool for bulk ingestion of files into Qdrant collections. This tool is perfect for building knowledge bases from existing documents, code repositories, or documentation.
+
+### Basic Usage
+
+```bash
+# Ingest all supported files from a directory
+qdrant-ingest /path/to/documents
+
+# Ingest with custom knowledge base name
+qdrant-ingest /path/to/documents --knowledgebase my-docs
+
+# Ingest single file
+qdrant-ingest /path/to/document.txt --knowledgebase single-doc
+
+# Connect to remote Qdrant instance
+qdrant-ingest /path/to/docs --url https://my-qdrant.example.com:6333 --api-key your-key
+```
+
+### Advanced Examples
+
+```bash
+# Filter files with regex patterns
+qdrant-ingest /path/to/code --include ".*\\.py$" --exclude ".*test.*"
+
+# Use specific embedding model
+qdrant-ingest /path/to/docs --embedding sentence-transformers/all-MiniLM-L6-v2
+
+# Verbose output with progress tracking
+qdrant-ingest /path/to/docs --verbose
+
+# Update existing knowledge base
+qdrant-ingest update /path/to/new-docs --knowledgebase my-docs
+
+# List all knowledge bases
+qdrant-ingest list
+
+# Remove knowledge base
+qdrant-ingest remove my-docs
+```
+
+### Supported File Types
+
+The CLI tool automatically processes these file types:
+`.txt`, `.md`, `.py`, `.js`, `.json`, `.yaml`, `.yml`, `.rst`, `.tf`, `.java`, `.sh`, `.go`, `.rb`, `.ts`, `.conf`, `.ini`, `.cfg`, `.toml`, `.xml`, `.html`, `.css`, `.sql`
+
+### Getting Help
+
+For complete usage information and all available options:
+
+```bash
+qdrant-ingest --help
+qdrant-ingest <command> --help  # Help for specific commands
+```
+
 ## Configuration Examples
 
 ### Basic Configuration with Chunking

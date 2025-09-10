@@ -77,6 +77,400 @@ class OperationResult:
         return (self.files_processed / self.total_files) * 100
 
 
+class ProgressReporter:
+    """
+    Handles progress reporting and user feedback for CLI operations.
+    
+    This class provides functionality for:
+    - Progress indicators during file processing
+    - Verbose logging and error reporting
+    - Batch processing with progress updates
+    - Summary reporting with success/failure counts
+    """
+    
+    def __init__(self, show_progress: bool = True, verbose: bool = False, batch_size: int = 10):
+        """
+        Initialize progress reporter.
+        
+        Args:
+            show_progress: Whether to show progress indicators
+            verbose: Whether to show verbose logging
+            batch_size: Number of items to process before showing progress update
+        """
+        self.show_progress = show_progress
+        self.verbose = verbose
+        self.batch_size = batch_size
+        self._current_operation: Optional[str] = None
+        self._total_items: int = 0
+        self._processed_items: int = 0
+        self._start_time: Optional[datetime] = None
+        self._last_progress_update: int = 0
+    
+    def start_operation(self, operation_name: str, total_items: int = 0) -> None:
+        """
+        Start tracking a new operation.
+        
+        Args:
+            operation_name: Name of the operation being performed
+            total_items: Total number of items to process (0 if unknown)
+        """
+        self._current_operation = operation_name
+        self._total_items = total_items
+        self._processed_items = 0
+        self._start_time = datetime.now()
+        self._last_progress_update = 0
+        
+        if self.show_progress:
+            if total_items > 0:
+                print(f"🚀 Starting {operation_name} ({total_items} items)")
+            else:
+                print(f"🚀 Starting {operation_name}")
+    
+    def update_progress(self, items_processed: int = 1, item_name: Optional[str] = None) -> None:
+        """
+        Update progress for the current operation.
+        
+        Args:
+            items_processed: Number of items processed in this update
+            item_name: Name of the current item being processed (for verbose mode)
+        """
+        self._processed_items += items_processed
+        
+        # Show verbose item-level progress
+        if self.verbose and item_name:
+            self._log_verbose(f"Processing: {item_name}")
+        
+        # Show batch progress updates
+        if self.show_progress and self._should_show_progress_update():
+            self._show_progress_update()
+            self._last_progress_update = self._processed_items
+    
+    def _should_show_progress_update(self) -> bool:
+        """
+        Determine if a progress update should be shown.
+        
+        Returns:
+            True if progress update should be shown
+        """
+        if self._total_items == 0:
+            # For unknown totals, show every batch_size items
+            return (self._processed_items - self._last_progress_update) >= self.batch_size
+        else:
+            # For known totals, show at percentage milestones or batch intervals
+            progress_percent = (self._processed_items / self._total_items) * 100
+            last_percent = (self._last_progress_update / self._total_items) * 100
+            
+            # Show at 10% intervals or every batch_size items, whichever comes first
+            return (
+                (progress_percent - last_percent) >= 10 or
+                (self._processed_items - self._last_progress_update) >= self.batch_size
+            )
+    
+    def _show_progress_update(self) -> None:
+        """Show a progress update to the user."""
+        if self._total_items > 0:
+            progress_percent = (self._processed_items / self._total_items) * 100
+            elapsed_time = (datetime.now() - self._start_time).total_seconds()
+            
+            # Estimate remaining time
+            if self._processed_items > 0:
+                items_per_second = self._processed_items / elapsed_time
+                remaining_items = self._total_items - self._processed_items
+                estimated_remaining = remaining_items / items_per_second if items_per_second > 0 else 0
+                
+                print(f"📊 Progress: {self._processed_items}/{self._total_items} "
+                      f"({progress_percent:.1f}%) - "
+                      f"ETA: {self._format_duration(estimated_remaining)}")
+            else:
+                print(f"📊 Progress: {self._processed_items}/{self._total_items} ({progress_percent:.1f}%)")
+        else:
+            elapsed_time = (datetime.now() - self._start_time).total_seconds()
+            rate = self._processed_items / elapsed_time if elapsed_time > 0 else 0
+            print(f"📊 Processed: {self._processed_items} items "
+                  f"({rate:.1f} items/sec)")
+    
+    def finish_operation(self, result: OperationResult) -> None:
+        """
+        Finish the current operation and show final summary.
+        
+        Args:
+            result: Final operation result with statistics
+        """
+        if not self._start_time:
+            return
+        
+        elapsed_time = (datetime.now() - self._start_time).total_seconds()
+        result.execution_time = elapsed_time
+        
+        # Show final progress if we were showing progress
+        if self.show_progress and self._total_items > 0:
+            print(f"📊 Progress: {self._processed_items}/{self._total_items} (100%)")
+        
+        # Show operation summary
+        self._show_operation_summary(result)
+        
+        # Reset state
+        self._current_operation = None
+        self._total_items = 0
+        self._processed_items = 0
+        self._start_time = None
+        self._last_progress_update = 0
+    
+    def _show_operation_summary(self, result: OperationResult) -> None:
+        """
+        Show a summary of the operation results.
+        
+        Args:
+            result: Operation result to summarize
+        """
+        print("\n" + "="*60)
+        print(f"📋 {self._current_operation or 'Operation'} Summary")
+        print("="*60)
+        
+        # Overall status
+        if result.success:
+            print("✅ Status: Completed successfully")
+        else:
+            print("❌ Status: Completed with errors")
+        
+        # File statistics
+        if result.total_files > 0:
+            print(f"📁 Files processed: {result.files_processed}")
+            print(f"⏭️  Files skipped: {result.files_skipped}")
+            if result.files_failed > 0:
+                print(f"❌ Files failed: {result.files_failed}")
+            print(f"📊 Success rate: {result.success_rate:.1f}%")
+        
+        # Chunk statistics
+        if result.chunks_created > 0:
+            print(f"🧩 Chunks created: {result.chunks_created}")
+        
+        # Timing information
+        print(f"⏱️  Execution time: {self._format_duration(result.execution_time)}")
+        
+        if result.total_files > 0 and result.execution_time > 0:
+            rate = result.files_processed / result.execution_time
+            print(f"🚀 Processing rate: {rate:.2f} files/second")
+        
+        # Warnings and errors
+        if result.warnings:
+            print(f"\n⚠️  Warnings ({len(result.warnings)}):")
+            for warning in result.warnings[:5]:  # Show first 5 warnings
+                print(f"   • {warning}")
+            if len(result.warnings) > 5:
+                print(f"   ... and {len(result.warnings) - 5} more warnings")
+        
+        if result.errors:
+            print(f"\n❌ Errors ({len(result.errors)}):")
+            for error in result.errors[:5]:  # Show first 5 errors
+                print(f"   • {error}")
+            if len(result.errors) > 5:
+                print(f"   ... and {len(result.errors) - 5} more errors")
+        
+        print("="*60)
+    
+    def report_file_processed(self, file_path: Path, success: bool, error_message: Optional[str] = None) -> None:
+        """
+        Report that a file has been processed.
+        
+        Args:
+            file_path: Path of the processed file
+            success: Whether processing was successful
+            error_message: Error message if processing failed
+        """
+        if success:
+            if self.verbose:
+                self._log_verbose(f"✅ Processed: {file_path}")
+        else:
+            if self.verbose:
+                self._log_verbose(f"❌ Failed: {file_path}")
+            if error_message:
+                self._log_error(f"Error processing {file_path}: {error_message}")
+        
+        self.update_progress(1, str(file_path))
+    
+    def report_file_skipped(self, file_path: Path, reason: str) -> None:
+        """
+        Report that a file was skipped.
+        
+        Args:
+            file_path: Path of the skipped file
+            reason: Reason why the file was skipped
+        """
+        if self.verbose:
+            self._log_verbose(f"⏭️  Skipped: {file_path} ({reason})")
+        
+        self.update_progress(1, str(file_path))
+    
+    def report_batch_processed(self, batch_size: int, success_count: int, error_count: int) -> None:
+        """
+        Report that a batch of items has been processed.
+        
+        Args:
+            batch_size: Size of the processed batch
+            success_count: Number of successful items in the batch
+            error_count: Number of failed items in the batch
+        """
+        if self.show_progress:
+            if error_count > 0:
+                print(f"📦 Batch processed: {success_count}/{batch_size} successful, {error_count} failed")
+            else:
+                print(f"📦 Batch processed: {batch_size} items successfully")
+        
+        self.update_progress(batch_size)
+    
+    def log_info(self, message: str) -> None:
+        """
+        Log an informational message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"📝 {message}")
+    
+    def log_success(self, message: str) -> None:
+        """
+        Log a success message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"✅ {message}")
+    
+    def log_warning(self, message: str) -> None:
+        """
+        Log a warning message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"⚠️  {message}")
+    
+    def log_error(self, message: str) -> None:
+        """
+        Log an error message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"❌ {message}", file=sys.stderr)
+    
+    def _log_verbose(self, message: str) -> None:
+        """
+        Log a verbose message if verbose mode is enabled.
+        
+        Args:
+            message: Message to log
+        """
+        if self.verbose:
+            print(f"ℹ️  {message}")
+    
+    def _log_error(self, message: str) -> None:
+        """
+        Log an error message to stderr.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"❌ {message}", file=sys.stderr)
+    
+    def _format_duration(self, seconds: float) -> str:
+        """
+        Format duration in seconds to human-readable format.
+        
+        Args:
+            seconds: Duration in seconds
+            
+        Returns:
+            Formatted duration string
+        """
+        if seconds < 1:
+            return f"{seconds*1000:.0f}ms"
+        elif seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            remaining_seconds = seconds % 60
+            return f"{minutes}m {remaining_seconds:.0f}s"
+        else:
+            hours = int(seconds // 3600)
+            remaining_minutes = int((seconds % 3600) // 60)
+            return f"{hours}h {remaining_minutes}m"
+    
+    def show_discovery_stats(self, stats: dict) -> None:
+        """
+        Show file discovery statistics.
+        
+        Args:
+            stats: Dictionary with discovery statistics
+        """
+        if stats['total_files'] == 0:
+            self.log_warning("No files discovered")
+            return
+        
+        self.log_info(f"Discovered {stats['total_files']} files")
+        
+        if self.verbose:
+            # Show size information
+            total_size_mb = stats['total_size'] / (1024 * 1024)
+            self._log_verbose(f"Total size: {total_size_mb:.2f} MB")
+            self._log_verbose(f"Estimated tokens: {stats['estimated_tokens']:,}")
+            
+            # Show file type breakdown
+            if stats['extensions']:
+                self._log_verbose("File types:")
+                for ext, count in sorted(stats['extensions'].items()):
+                    self._log_verbose(f"  {ext}: {count} files")
+            
+            # Show encoding breakdown
+            if stats['encodings']:
+                self._log_verbose("Encodings:")
+                for enc, count in sorted(stats['encodings'].items()):
+                    self._log_verbose(f"  {enc}: {count} files")
+    
+    def show_processing_stats(self, stats: dict) -> None:
+        """
+        Show content processing statistics.
+        
+        Args:
+            stats: Dictionary with processing statistics
+        """
+        if stats['total_entries'] == 0:
+            return
+        
+        if self.verbose:
+            avg_length = stats['average_content_length']
+            self._log_verbose(f"Average content length: {avg_length:.0f} characters")
+            
+            # Show file type breakdown
+            if stats['file_types']:
+                self._log_verbose("Processed file types:")
+                for file_type, count in sorted(stats['file_types'].items()):
+                    self._log_verbose(f"  {file_type}: {count} files")
+    
+    def confirm_operation(self, message: str, force: bool = False) -> bool:
+        """
+        Ask user for confirmation unless force mode is enabled.
+        
+        Args:
+            message: Confirmation message to display
+            force: Whether to skip confirmation (force mode)
+            
+        Returns:
+            True if user confirms or force mode is enabled, False otherwise
+        """
+        if force:
+            self.log_info(f"Force mode enabled: {message}")
+            return True
+        
+        try:
+            response = input(f"❓ {message} (y/N): ").strip().lower()
+            return response in ['y', 'yes']
+        except (EOFError, KeyboardInterrupt):
+            print("\n🚫 Operation cancelled by user")
+            return False
+
+
 class CLISettings(BaseSettings):
     """CLI-specific settings that extend existing settings classes."""
 
@@ -1398,6 +1792,11 @@ class BaseOperation(ABC):
         self.config = config
         self._connector: Optional[QdrantConnector] = None
         self._embedding_provider: Optional[EmbeddingProvider] = None
+        self.progress_reporter = ProgressReporter(
+            show_progress=config.cli_settings.show_progress,
+            verbose=config.cli_settings.verbose,
+            batch_size=config.cli_settings.batch_size
+        )
 
     @abstractmethod
     async def execute(self) -> OperationResult:
@@ -1476,8 +1875,7 @@ class BaseOperation(ABC):
         Args:
             message: Message to log
         """
-        if self.config.cli_settings.verbose:
-            print(f"ℹ️  {message}")
+        self.progress_reporter._log_verbose(message)
 
     def _log_info(self, message: str) -> None:
         """
@@ -1486,7 +1884,7 @@ class BaseOperation(ABC):
         Args:
             message: Message to log
         """
-        print(f"📝 {message}")
+        self.progress_reporter.log_info(message)
 
     def _log_success(self, message: str) -> None:
         """
@@ -1495,7 +1893,7 @@ class BaseOperation(ABC):
         Args:
             message: Message to log
         """
-        print(f"✅ {message}")
+        self.progress_reporter.log_success(message)
 
     def _log_warning(self, message: str) -> None:
         """
@@ -1504,7 +1902,7 @@ class BaseOperation(ABC):
         Args:
             message: Message to log
         """
-        print(f"⚠️  {message}")
+        self.progress_reporter.log_warning(message)
 
     def _log_error(self, message: str) -> None:
         """
@@ -1513,7 +1911,7 @@ class BaseOperation(ABC):
         Args:
             message: Message to log
         """
-        print(f"❌ {message}", file=sys.stderr)
+        self.progress_reporter.log_error(message)
 
     def _confirm_operation(self, message: str) -> bool:
         """
@@ -1525,15 +1923,10 @@ class BaseOperation(ABC):
         Returns:
             True if user confirms or force mode is enabled, False otherwise
         """
-        if self.config.cli_settings.force_operation:
-            return True
-        
-        try:
-            response = input(f"{message} (y/N): ").strip().lower()
-            return response in ['y', 'yes']
-        except (EOFError, KeyboardInterrupt):
-            print("\nOperation cancelled by user")
-            return False
+        return self.progress_reporter.confirm_operation(
+            message, 
+            force=self.config.cli_settings.force_operation
+        )
 
 
 class IngestOperation(BaseOperation):
@@ -1551,7 +1944,6 @@ class IngestOperation(BaseOperation):
         Returns:
             OperationResult with ingestion statistics
         """
-        start_time = datetime.now()
         result = OperationResult(success=False)
         
         try:
@@ -1559,8 +1951,15 @@ class IngestOperation(BaseOperation):
             validation_errors = self.validate_preconditions()
             if validation_errors:
                 result.errors.extend(validation_errors)
+                self.progress_reporter.finish_operation(result)
                 return result
             
+            # Start operation tracking
+            operation_name = "File Ingestion"
+            if self.config.cli_settings.dry_run:
+                operation_name += " (Dry Run)"
+            
+            self.progress_reporter.start_operation(operation_name)
             self._log_info(f"Starting ingestion into collection '{self.config.knowledgebase_name}'")
             
             if self.config.cli_settings.dry_run:
@@ -1577,15 +1976,17 @@ class IngestOperation(BaseOperation):
             if not discovered_files:
                 self._log_warning("No files found matching the specified criteria")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
             
+            # Show discovery statistics
             discovery_stats = file_discovery.get_discovery_stats(discovered_files)
-            self._log_info(f"Discovered {discovery_stats['total_files']} files ({discovery_stats['total_size']} bytes)")
+            self.progress_reporter.show_discovery_stats(discovery_stats)
             
-            if self.config.cli_settings.verbose:
-                self._log_verbose(f"File types: {discovery_stats['extensions']}")
+            # Update progress reporter with total file count
+            self.progress_reporter._total_items = len(discovered_files)
             
-            # Process files
+            # Process files with progress reporting
             content_processor = ContentProcessor()
             processed_entries = []
             
@@ -1595,58 +1996,75 @@ class IngestOperation(BaseOperation):
                     if entry:
                         processed_entries.append(entry)
                         result.files_processed += 1
+                        self.progress_reporter.report_file_processed(file_info.path, True)
                     else:
                         result.files_skipped += 1
-                        if self.config.cli_settings.verbose:
-                            self._log_verbose(f"Skipped: {file_info.path}")
+                        self.progress_reporter.report_file_skipped(
+                            file_info.path, 
+                            "empty or binary file"
+                        )
                 except Exception as e:
                     result.files_failed += 1
-                    result.errors.append(f"Failed to process {file_info.path}: {e}")
-                    self._log_error(f"Failed to process {file_info.path}: {e}")
+                    error_msg = f"Failed to process {file_info.path}: {e}"
+                    result.errors.append(error_msg)
+                    self.progress_reporter.report_file_processed(file_info.path, False, str(e))
             
             if not processed_entries:
                 self._log_warning("No files could be processed successfully")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
+            
+            # Show processing statistics
+            processing_stats = content_processor.get_processing_stats(processed_entries)
+            self.progress_reporter.show_processing_stats(processing_stats)
             
             # Store entries in Qdrant (unless dry run)
             if not self.config.cli_settings.dry_run:
+                self._log_info("Storing entries in Qdrant...")
                 connector = await self.get_connector()
                 
-                # Store entries and get chunk count
-                for entry in processed_entries:
-                    try:
-                        await connector.store(entry, collection_name=self.config.knowledgebase_name)
-                        # Estimate chunks created (actual chunking happens in QdrantConnector)
-                        estimated_chunks = max(1, len(entry.content) // 1000)  # Rough estimate
-                        result.chunks_created += estimated_chunks
-                    except Exception as e:
-                        result.errors.append(f"Failed to store entry: {e}")
-                        self._log_error(f"Failed to store entry: {e}")
+                # Process entries in batches for better progress reporting
+                batch_size = self.config.cli_settings.batch_size
+                total_batches = (len(processed_entries) + batch_size - 1) // batch_size
+                
+                for i in range(0, len(processed_entries), batch_size):
+                    batch = processed_entries[i:i + batch_size]
+                    batch_success = 0
+                    batch_errors = 0
+                    
+                    for entry in batch:
+                        try:
+                            await connector.store(entry, collection_name=self.config.knowledgebase_name)
+                            # Estimate chunks created (actual chunking happens in QdrantConnector)
+                            estimated_chunks = max(1, len(entry.content) // 1000)  # Rough estimate
+                            result.chunks_created += estimated_chunks
+                            batch_success += 1
+                        except Exception as e:
+                            error_msg = f"Failed to store entry: {e}"
+                            result.errors.append(error_msg)
+                            batch_errors += 1
+                    
+                    # Report batch progress
+                    if self.progress_reporter.show_progress and len(processed_entries) > batch_size:
+                        self.progress_reporter.report_batch_processed(
+                            len(batch), batch_success, batch_errors
+                        )
             else:
                 # In dry run, just estimate chunks
                 for entry in processed_entries:
                     estimated_chunks = max(1, len(entry.content) // 1000)
                     result.chunks_created += estimated_chunks
             
-            # Calculate execution time
-            result.execution_time = (datetime.now() - start_time).total_seconds()
             result.success = True
-            
-            # Log summary
-            self._log_success(f"Ingestion completed successfully")
-            self._log_info(f"Files processed: {result.files_processed}")
-            self._log_info(f"Files skipped: {result.files_skipped}")
-            self._log_info(f"Estimated chunks created: {result.chunks_created}")
-            if result.files_failed > 0:
-                self._log_warning(f"Files failed: {result.files_failed}")
-            
+            self.progress_reporter.finish_operation(result)
             return result
             
         except Exception as e:
-            result.errors.append(f"Ingestion failed: {e}")
-            result.execution_time = (datetime.now() - start_time).total_seconds()
-            self._log_error(f"Ingestion failed: {e}")
+            error_msg = f"Ingestion failed: {e}"
+            result.errors.append(error_msg)
+            self._log_error(error_msg)
+            self.progress_reporter.finish_operation(result)
             return result
 
     def validate_preconditions(self) -> List[str]:
@@ -1692,7 +2110,6 @@ class UpdateOperation(BaseOperation):
         Returns:
             OperationResult with update statistics
         """
-        start_time = datetime.now()
         result = OperationResult(success=False)
         
         try:
@@ -1700,7 +2117,16 @@ class UpdateOperation(BaseOperation):
             validation_errors = self.validate_preconditions()
             if validation_errors:
                 result.errors.extend(validation_errors)
+                self.progress_reporter.finish_operation(result)
                 return result
+            
+            # Start operation tracking
+            mode_text = "replace" if self.config.cli_settings.update_mode == "replace" else "add-only"
+            operation_name = f"Collection Update ({mode_text} mode)"
+            if self.config.cli_settings.dry_run:
+                operation_name += " (Dry Run)"
+            
+            self.progress_reporter.start_operation(operation_name)
             
             collection_exists = await self.check_collection_exists(self.config.knowledgebase_name)
             
@@ -1710,6 +2136,7 @@ class UpdateOperation(BaseOperation):
                     if not self._confirm_operation("⚠️  This will delete all existing data in the collection. Continue?"):
                         self._log_info("Update cancelled by user")
                         result.success = True
+                        self.progress_reporter.finish_operation(result)
                         return result
                 else:
                     self._log_info(f"Collection '{self.config.knowledgebase_name}' does not exist, creating new collection")
@@ -1733,8 +2160,10 @@ class UpdateOperation(BaseOperation):
                     cleared_count = await connector.clear_collection(self.config.knowledgebase_name)
                     self._log_info(f"Existing collection cleared ({cleared_count} points removed)")
                 except Exception as e:
-                    result.errors.append(f"Failed to clear collection: {e}")
-                    self._log_error(f"Failed to clear collection: {e}")
+                    error_msg = f"Failed to clear collection: {e}"
+                    result.errors.append(error_msg)
+                    self._log_error(error_msg)
+                    self.progress_reporter.finish_operation(result)
                     return result
             
             # Discover files
@@ -1748,10 +2177,12 @@ class UpdateOperation(BaseOperation):
             if not discovered_files:
                 self._log_warning("No files found matching the specified criteria")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
             
+            # Show discovery statistics
             discovery_stats = file_discovery.get_discovery_stats(discovered_files)
-            self._log_info(f"Discovered {discovery_stats['total_files']} files ({discovery_stats['total_size']} bytes)")
+            self.progress_reporter.show_discovery_stats(discovery_stats)
             
             # In add-only mode, filter out files that already exist
             if (self.config.cli_settings.update_mode == "add-only" and 
@@ -1762,11 +2193,15 @@ class UpdateOperation(BaseOperation):
                 if not discovered_files:
                     self._log_info("All files already exist in collection, nothing to update")
                     result.success = True
+                    self.progress_reporter.finish_operation(result)
                     return result
                 
                 self._log_info(f"After filtering existing files: {len(discovered_files)} files to process")
             
-            # Process files (same as ingestion)
+            # Update progress reporter with total file count
+            self.progress_reporter._total_items = len(discovered_files)
+            
+            # Process files with progress reporting
             content_processor = ContentProcessor()
             processed_entries = []
             
@@ -1776,57 +2211,73 @@ class UpdateOperation(BaseOperation):
                     if entry:
                         processed_entries.append(entry)
                         result.files_processed += 1
+                        self.progress_reporter.report_file_processed(file_info.path, True)
                     else:
                         result.files_skipped += 1
-                        if self.config.cli_settings.verbose:
-                            self._log_verbose(f"Skipped: {file_info.path}")
+                        self.progress_reporter.report_file_skipped(
+                            file_info.path, 
+                            "empty or binary file"
+                        )
                 except Exception as e:
                     result.files_failed += 1
-                    result.errors.append(f"Failed to process {file_info.path}: {e}")
-                    self._log_error(f"Failed to process {file_info.path}: {e}")
+                    error_msg = f"Failed to process {file_info.path}: {e}"
+                    result.errors.append(error_msg)
+                    self.progress_reporter.report_file_processed(file_info.path, False, str(e))
             
             if not processed_entries:
                 self._log_warning("No files could be processed successfully")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
+            
+            # Show processing statistics
+            processing_stats = content_processor.get_processing_stats(processed_entries)
+            self.progress_reporter.show_processing_stats(processing_stats)
             
             # Store entries in Qdrant (unless dry run)
             if not self.config.cli_settings.dry_run:
+                self._log_info("Storing entries in Qdrant...")
                 connector = await self.get_connector()
                 
-                for entry in processed_entries:
-                    try:
-                        await connector.store(entry, collection_name=self.config.knowledgebase_name)
-                        estimated_chunks = max(1, len(entry.content) // 1000)
-                        result.chunks_created += estimated_chunks
-                    except Exception as e:
-                        result.errors.append(f"Failed to store entry: {e}")
-                        self._log_error(f"Failed to store entry: {e}")
+                # Process entries in batches for better progress reporting
+                batch_size = self.config.cli_settings.batch_size
+                
+                for i in range(0, len(processed_entries), batch_size):
+                    batch = processed_entries[i:i + batch_size]
+                    batch_success = 0
+                    batch_errors = 0
+                    
+                    for entry in batch:
+                        try:
+                            await connector.store(entry, collection_name=self.config.knowledgebase_name)
+                            estimated_chunks = max(1, len(entry.content) // 1000)
+                            result.chunks_created += estimated_chunks
+                            batch_success += 1
+                        except Exception as e:
+                            error_msg = f"Failed to store entry: {e}"
+                            result.errors.append(error_msg)
+                            batch_errors += 1
+                    
+                    # Report batch progress
+                    if self.progress_reporter.show_progress and len(processed_entries) > batch_size:
+                        self.progress_reporter.report_batch_processed(
+                            len(batch), batch_success, batch_errors
+                        )
             else:
                 # In dry run, just estimate chunks
                 for entry in processed_entries:
                     estimated_chunks = max(1, len(entry.content) // 1000)
                     result.chunks_created += estimated_chunks
             
-            # Calculate execution time
-            result.execution_time = (datetime.now() - start_time).total_seconds()
             result.success = True
-            
-            # Log summary
-            mode_text = "replace" if self.config.cli_settings.update_mode == "replace" else "add-only"
-            self._log_success(f"Update completed successfully ({mode_text} mode)")
-            self._log_info(f"Files processed: {result.files_processed}")
-            self._log_info(f"Files skipped: {result.files_skipped}")
-            self._log_info(f"Estimated chunks created: {result.chunks_created}")
-            if result.files_failed > 0:
-                self._log_warning(f"Files failed: {result.files_failed}")
-            
+            self.progress_reporter.finish_operation(result)
             return result
             
         except Exception as e:
-            result.errors.append(f"Update failed: {e}")
-            result.execution_time = (datetime.now() - start_time).total_seconds()
-            self._log_error(f"Update failed: {e}")
+            error_msg = f"Update failed: {e}"
+            result.errors.append(error_msg)
+            self._log_error(error_msg)
+            self.progress_reporter.finish_operation(result)
             return result
 
     def validate_preconditions(self) -> List[str]:
@@ -1894,7 +2345,6 @@ class RemoveOperation(BaseOperation):
         Returns:
             OperationResult with removal statistics
         """
-        start_time = datetime.now()
         result = OperationResult(success=False)
         
         try:
@@ -1902,7 +2352,15 @@ class RemoveOperation(BaseOperation):
             validation_errors = self.validate_preconditions()
             if validation_errors:
                 result.errors.extend(validation_errors)
+                self.progress_reporter.finish_operation(result)
                 return result
+            
+            # Start operation tracking
+            operation_name = "Collection Removal"
+            if self.config.cli_settings.dry_run:
+                operation_name += " (Dry Run)"
+            
+            self.progress_reporter.start_operation(operation_name, 1)
             
             # Check if collection exists
             collection_exists = await self.check_collection_exists(self.config.knowledgebase_name)
@@ -1910,6 +2368,7 @@ class RemoveOperation(BaseOperation):
             if not collection_exists:
                 self._log_info(f"Collection '{self.config.knowledgebase_name}' does not exist")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
             
             self._log_info(f"Found collection '{self.config.knowledgebase_name}'")
@@ -1917,39 +2376,46 @@ class RemoveOperation(BaseOperation):
             if self.config.cli_settings.dry_run:
                 self._log_info("DRY RUN MODE - Collection would be deleted")
                 result.success = True
+                self.progress_reporter.update_progress(1, f"Would delete collection '{self.config.knowledgebase_name}'")
+                self.progress_reporter.finish_operation(result)
                 return result
             
             # Confirm deletion
             if not self._confirm_operation(f"🗑️  Delete collection '{self.config.knowledgebase_name}' and all its data?"):
                 self._log_info("Removal cancelled by user")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
             
             # Delete collection
             connector = await self.get_connector()
             try:
+                self.progress_reporter.update_progress(0, f"Deleting collection '{self.config.knowledgebase_name}'...")
                 deleted = await connector.delete_collection(self.config.knowledgebase_name)
                 if deleted:
                     result.files_processed = 1  # Use this to indicate collection was deleted
                     self._log_success(f"Collection '{self.config.knowledgebase_name}' deleted successfully")
+                    self.progress_reporter.update_progress(1, f"Deleted collection '{self.config.knowledgebase_name}'")
                 else:
                     self._log_info(f"Collection '{self.config.knowledgebase_name}' was already deleted")
+                    self.progress_reporter.update_progress(1, f"Collection '{self.config.knowledgebase_name}' was already deleted")
                     result.success = True
             except Exception as e:
-                result.errors.append(f"Failed to delete collection: {e}")
-                self._log_error(f"Failed to delete collection: {e}")
+                error_msg = f"Failed to delete collection: {e}"
+                result.errors.append(error_msg)
+                self._log_error(error_msg)
+                self.progress_reporter.finish_operation(result)
                 return result
             
-            # Calculate execution time
-            result.execution_time = (datetime.now() - start_time).total_seconds()
             result.success = True
-            
+            self.progress_reporter.finish_operation(result)
             return result
             
         except Exception as e:
-            result.errors.append(f"Remove operation failed: {e}")
-            result.execution_time = (datetime.now() - start_time).total_seconds()
-            self._log_error(f"Remove operation failed: {e}")
+            error_msg = f"Remove operation failed: {e}"
+            result.errors.append(error_msg)
+            self._log_error(error_msg)
+            self.progress_reporter.finish_operation(result)
             return result
 
     def validate_preconditions(self) -> List[str]:
@@ -1987,7 +2453,6 @@ class ListOperation(BaseOperation):
         Returns:
             OperationResult with listing statistics
         """
-        start_time = datetime.now()
         result = OperationResult(success=False)
         
         try:
@@ -1995,8 +2460,11 @@ class ListOperation(BaseOperation):
             validation_errors = self.validate_preconditions()
             if validation_errors:
                 result.errors.extend(validation_errors)
+                self.progress_reporter.finish_operation(result)
                 return result
             
+            # Start operation tracking
+            self.progress_reporter.start_operation("Collection Listing")
             self._log_info("Listing available knowledge bases...")
             
             # Get connector (we need a temporary one for listing)
@@ -2014,17 +2482,23 @@ class ListOperation(BaseOperation):
             
             # Get collection names
             try:
+                self.progress_reporter.update_progress(0, "Connecting to Qdrant...")
                 collection_names = await temp_connector.get_collection_names()
             except Exception as e:
-                result.errors.append(f"Failed to connect to Qdrant: {e}")
-                self._log_error(f"Failed to connect to Qdrant: {e}")
+                error_msg = f"Failed to connect to Qdrant: {e}"
+                result.errors.append(error_msg)
+                self._log_error(error_msg)
+                self.progress_reporter.finish_operation(result)
                 return result
             
             if not collection_names:
                 self._log_info("No knowledge bases found")
                 result.success = True
+                self.progress_reporter.finish_operation(result)
                 return result
             
+            # Update progress reporter with total collection count
+            self.progress_reporter._total_items = len(collection_names)
             self._log_info(f"Found {len(collection_names)} knowledge base(s):")
             print()
             
@@ -2064,17 +2538,20 @@ class ListOperation(BaseOperation):
                         print(f"   Error getting details: {e}")
                 
                 print()  # Empty line between collections
+                
+                # Update progress
+                self.progress_reporter.update_progress(1, f"Listed collection: {collection_name}")
             
             result.files_processed = len(collection_names)  # Use this to indicate collections listed
             result.success = True
-            result.execution_time = (datetime.now() - start_time).total_seconds()
-            
+            self.progress_reporter.finish_operation(result)
             return result
             
         except Exception as e:
-            result.errors.append(f"List operation failed: {e}")
-            result.execution_time = (datetime.now() - start_time).total_seconds()
-            self._log_error(f"List operation failed: {e}")
+            error_msg = f"List operation failed: {e}"
+            result.errors.append(error_msg)
+            self._log_error(error_msg)
+            self.progress_reporter.finish_operation(result)
             return result
 
     def validate_preconditions(self) -> List[str]:

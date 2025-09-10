@@ -27,7 +27,9 @@ from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings
 
 from .settings import QdrantSettings, EmbeddingProviderSettings
-from .qdrant import Entry
+from .qdrant import Entry, QdrantConnector
+from .embeddings.factory import create_embedding_provider
+from .embeddings.base import EmbeddingProvider
 
 
 @dataclass
@@ -967,6 +969,413 @@ class ContentProcessor:
         }
 
 
+@dataclass
+class EmbeddingModelInfo:
+    """Information about an embedding model and its compatibility."""
+    
+    model_name: str
+    vector_size: int
+    vector_name: str
+    is_available: bool = True
+    is_compatible: bool = True
+    error_message: Optional[str] = None
+    collection_exists: bool = False
+    collection_model: Optional[str] = None
+    collection_vector_size: Optional[int] = None
+    collection_vector_name: Optional[str] = None
+
+
+class EmbeddingModelIntelligence:
+    """
+    Handles intelligent embedding model selection and validation for CLI operations.
+    
+    This class provides functionality to:
+    - Detect existing embedding models from collections
+    - Select smart defaults for new collections
+    - Validate embedding model compatibility
+    - Display embedding model information and errors
+    """
+    
+    DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5-Q"
+    FALLBACK_MODELS = [
+        "nomic-ai/nomic-embed-text-v1.5-Q",
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "BAAI/bge-small-en-v1.5",
+        "intfloat/e5-small-v2"
+    ]
+    
+    def __init__(self, qdrant_settings: QdrantSettings):
+        """
+        Initialize embedding model intelligence.
+        
+        Args:
+            qdrant_settings: Qdrant connection settings
+        """
+        self.qdrant_settings = qdrant_settings
+        self._connector_cache: Optional[QdrantConnector] = None
+    
+    async def detect_collection_model(self, collection_name: str) -> Optional[EmbeddingModelInfo]:
+        """
+        Detect the embedding model used by an existing collection.
+        
+        Args:
+            collection_name: Name of the collection to analyze
+            
+        Returns:
+            EmbeddingModelInfo if collection exists and model can be detected, None otherwise
+        """
+        try:
+            # Create a temporary connector to check collection
+            temp_embedding_settings = EmbeddingProviderSettings(model_name=self.DEFAULT_MODEL)
+            temp_provider = create_embedding_provider(temp_embedding_settings)
+            
+            connector = QdrantConnector(
+                qdrant_url=self.qdrant_settings.location,
+                qdrant_api_key=self.qdrant_settings.api_key,
+                collection_name=collection_name,
+                embedding_provider=temp_provider,
+                qdrant_local_path=getattr(self.qdrant_settings, 'local_path', None)
+            )
+            
+            # Check if collection exists
+            collection_names = await connector.get_collection_names()
+            if collection_name not in collection_names:
+                return None
+            
+            # Get collection compatibility info
+            compatibility_info = await connector.check_collection_compatibility(collection_name)
+            
+            if not compatibility_info.get("exists", False):
+                return None
+            
+            # Extract model information from collection
+            collection_vector_name = None
+            collection_vector_size = None
+            
+            available_vectors = compatibility_info.get("available_vectors", {})
+            if available_vectors:
+                # Use the first available vector as the primary one
+                collection_vector_name = list(available_vectors.keys())[0]
+                collection_vector_size = available_vectors[collection_vector_name]
+            
+            # Try to infer model name from vector name and size
+            inferred_model = self._infer_model_from_collection_info(
+                collection_vector_name, collection_vector_size
+            )
+            
+            return EmbeddingModelInfo(
+                model_name=inferred_model or "unknown",
+                vector_size=collection_vector_size or 0,
+                vector_name=collection_vector_name or "unknown",
+                is_available=inferred_model is not None,
+                is_compatible=True,  # If we can detect it, it should be compatible
+                collection_exists=True,
+                collection_model=inferred_model,
+                collection_vector_size=collection_vector_size,
+                collection_vector_name=collection_vector_name
+            )
+            
+        except Exception as e:
+            return EmbeddingModelInfo(
+                model_name="unknown",
+                vector_size=0,
+                vector_name="unknown",
+                is_available=False,
+                is_compatible=False,
+                error_message=f"Failed to detect collection model: {str(e)}",
+                collection_exists=True  # Assume it exists if we got an error during detection
+            )
+    
+    def _infer_model_from_collection_info(
+        self, 
+        vector_name: Optional[str], 
+        vector_size: Optional[int]
+    ) -> Optional[str]:
+        """
+        Infer the embedding model from collection vector information.
+        
+        Args:
+            vector_name: Name of the vector in the collection
+            vector_size: Size of the vector dimensions
+            
+        Returns:
+            Inferred model name or None if cannot be determined
+        """
+        if not vector_name or not vector_size:
+            return None
+        
+        # Common model patterns based on vector name and size
+        model_patterns = {
+            # Nomic models
+            ("fast-nomic-embed-text-v1.5-q", 768): "nomic-ai/nomic-embed-text-v1.5-Q",
+            ("fast-nomic-embed-text-v1", 768): "nomic-ai/nomic-embed-text-v1",
+            
+            # Sentence transformers
+            ("fast-all-minilm-l6-v2", 384): "sentence-transformers/all-MiniLM-L6-v2",
+            ("fast-all-minilm-l12-v2", 384): "sentence-transformers/all-MiniLM-L12-v2",
+            
+            # BGE models
+            ("fast-bge-small-en-v1.5", 384): "BAAI/bge-small-en-v1.5",
+            ("fast-bge-base-en-v1.5", 768): "BAAI/bge-base-en-v1.5",
+            
+            # E5 models
+            ("fast-e5-small-v2", 384): "intfloat/e5-small-v2",
+            ("fast-e5-base-v2", 768): "intfloat/e5-base-v2",
+        }
+        
+        # Try exact match first
+        key = (vector_name.lower(), vector_size)
+        if key in model_patterns:
+            return model_patterns[key]
+        
+        # Try partial matches based on vector name patterns
+        vector_name_lower = vector_name.lower()
+        for (pattern_name, pattern_size), model in model_patterns.items():
+            if pattern_size == vector_size:
+                # Check if vector name contains key parts of the pattern
+                pattern_parts = pattern_name.replace("fast-", "").split("-")
+                if all(part in vector_name_lower for part in pattern_parts[:2]):  # Match first 2 parts
+                    return model
+        
+        # If no pattern matches, return None
+        return None
+    
+    async def select_smart_default(self, collection_name: str) -> EmbeddingModelInfo:
+        """
+        Select a smart default embedding model for a collection.
+        
+        For existing collections, detects and uses the existing model.
+        For new collections, uses the configured default or falls back to a working model.
+        
+        Args:
+            collection_name: Name of the collection
+            
+        Returns:
+            EmbeddingModelInfo with the selected model
+        """
+        # First, try to detect existing collection model
+        existing_model_info = await self.detect_collection_model(collection_name)
+        if existing_model_info and existing_model_info.is_available:
+            return existing_model_info
+        
+        # For new collections, try the default model
+        default_model_info = await self.validate_model(self.DEFAULT_MODEL)
+        if default_model_info.is_available:
+            return default_model_info
+        
+        # If default doesn't work, try fallback models
+        for fallback_model in self.FALLBACK_MODELS:
+            if fallback_model == self.DEFAULT_MODEL:
+                continue  # Already tried
+            
+            fallback_info = await self.validate_model(fallback_model)
+            if fallback_info.is_available:
+                return fallback_info
+        
+        # If all models fail, return error info
+        return EmbeddingModelInfo(
+            model_name=self.DEFAULT_MODEL,
+            vector_size=0,
+            vector_name="unknown",
+            is_available=False,
+            is_compatible=False,
+            error_message="No compatible embedding models are available. Please check your FastEmbed installation."
+        )
+    
+    async def validate_model(self, model_name: str) -> EmbeddingModelInfo:
+        """
+        Validate that an embedding model is available and working.
+        
+        Args:
+            model_name: Name of the model to validate
+            
+        Returns:
+            EmbeddingModelInfo with validation results
+        """
+        try:
+            # Create embedding settings and provider
+            embedding_settings = EmbeddingProviderSettings(model_name=model_name)
+            provider = create_embedding_provider(embedding_settings)
+            
+            # Get model information
+            vector_size = provider.get_vector_size()
+            vector_name = provider.get_vector_name()
+            
+            return EmbeddingModelInfo(
+                model_name=model_name,
+                vector_size=vector_size,
+                vector_name=vector_name,
+                is_available=True,
+                is_compatible=True
+            )
+            
+        except Exception as e:
+            return EmbeddingModelInfo(
+                model_name=model_name,
+                vector_size=0,
+                vector_name="unknown",
+                is_available=False,
+                is_compatible=False,
+                error_message=f"Model validation failed: {str(e)}"
+            )
+    
+    async def validate_model_compatibility(
+        self, 
+        model_name: str, 
+        collection_name: str
+    ) -> EmbeddingModelInfo:
+        """
+        Validate that a model is compatible with an existing collection.
+        
+        Args:
+            model_name: Name of the model to validate
+            collection_name: Name of the collection to check compatibility with
+            
+        Returns:
+            EmbeddingModelInfo with compatibility results
+        """
+        # First validate the model itself
+        model_info = await self.validate_model(model_name)
+        if not model_info.is_available:
+            return model_info
+        
+        # Check collection compatibility
+        try:
+            embedding_settings = EmbeddingProviderSettings(model_name=model_name)
+            provider = create_embedding_provider(embedding_settings)
+            
+            connector = QdrantConnector(
+                qdrant_url=self.qdrant_settings.location,
+                qdrant_api_key=self.qdrant_settings.api_key,
+                collection_name=collection_name,
+                embedding_provider=provider,
+                qdrant_local_path=getattr(self.qdrant_settings, 'local_path', None)
+            )
+            
+            # Check collection compatibility
+            compatibility_info = await connector.check_collection_compatibility(collection_name)
+            
+            if not compatibility_info.get("exists", False):
+                # Collection doesn't exist, so model is compatible
+                model_info.is_compatible = True
+                model_info.collection_exists = False
+                return model_info
+            
+            # Collection exists, check compatibility
+            vector_compatible = compatibility_info.get("vector_compatible", False)
+            dimension_compatible = compatibility_info.get("dimension_compatible", False)
+            
+            model_info.collection_exists = True
+            model_info.is_compatible = vector_compatible and dimension_compatible
+            
+            if not model_info.is_compatible:
+                expected_dims = compatibility_info.get("expected_dimensions", 0)
+                actual_dims = compatibility_info.get("actual_dimensions", 0)
+                
+                if not vector_compatible:
+                    model_info.error_message = (
+                        f"Vector name mismatch. Collection uses different vector configuration. "
+                        f"Expected: {model_info.vector_name}"
+                    )
+                elif not dimension_compatible:
+                    model_info.error_message = (
+                        f"Dimension mismatch. Collection has {actual_dims} dimensions, "
+                        f"but model '{model_name}' produces {expected_dims} dimensions."
+                    )
+            
+            # Store collection information
+            available_vectors = compatibility_info.get("available_vectors", {})
+            if available_vectors:
+                collection_vector_name = list(available_vectors.keys())[0]
+                model_info.collection_vector_name = collection_vector_name
+                model_info.collection_vector_size = available_vectors[collection_vector_name]
+                model_info.collection_model = self._infer_model_from_collection_info(
+                    collection_vector_name, model_info.collection_vector_size
+                )
+            
+            return model_info
+            
+        except Exception as e:
+            model_info.is_compatible = False
+            model_info.error_message = f"Compatibility check failed: {str(e)}"
+            return model_info
+    
+    def display_model_info(self, model_info: EmbeddingModelInfo, verbose: bool = False) -> None:
+        """
+        Display embedding model information to the user.
+        
+        Args:
+            model_info: Model information to display
+            verbose: Whether to show detailed information
+        """
+        if not model_info.is_available:
+            print(f"❌ Model '{model_info.model_name}' is not available")
+            if model_info.error_message:
+                print(f"   Error: {model_info.error_message}")
+            return
+        
+        if model_info.collection_exists:
+            if model_info.is_compatible:
+                print(f"✅ Model '{model_info.model_name}' is compatible with existing collection")
+                if verbose and model_info.collection_model:
+                    print(f"   Collection model: {model_info.collection_model}")
+                    print(f"   Vector dimensions: {model_info.collection_vector_size}")
+            else:
+                print(f"❌ Model '{model_info.model_name}' is incompatible with existing collection")
+                if model_info.error_message:
+                    print(f"   Error: {model_info.error_message}")
+                if verbose and model_info.collection_model:
+                    print(f"   Collection model: {model_info.collection_model}")
+                    print(f"   Collection dimensions: {model_info.collection_vector_size}")
+                    print(f"   Requested dimensions: {model_info.vector_size}")
+        else:
+            print(f"✅ Model '{model_info.model_name}' is available for new collection")
+            if verbose:
+                print(f"   Vector dimensions: {model_info.vector_size}")
+                print(f"   Vector name: {model_info.vector_name}")
+    
+    def display_model_mismatch_error(self, model_info: EmbeddingModelInfo) -> None:
+        """
+        Display a detailed error message for model mismatches.
+        
+        Args:
+            model_info: Model information with mismatch details
+        """
+        print("🚫 Embedding Model Mismatch Detected")
+        print()
+        print(f"The collection already exists with a different embedding model configuration:")
+        print(f"  Collection model: {model_info.collection_model or 'Unknown'}")
+        print(f"  Collection dimensions: {model_info.collection_vector_size}")
+        print(f"  Collection vector name: {model_info.collection_vector_name}")
+        print()
+        print(f"Requested model configuration:")
+        print(f"  Model: {model_info.model_name}")
+        print(f"  Dimensions: {model_info.vector_size}")
+        print(f"  Vector name: {model_info.vector_name}")
+        print()
+        print("Solutions:")
+        if model_info.collection_model:
+            print(f"  1. Use the existing model: --embedding {model_info.collection_model}")
+        print(f"  2. Use a different collection name: --knowledgebase different-name")
+        print(f"  3. Remove the existing collection first: qdrant-ingest remove {model_info.collection_model}")
+        print()
+    
+    async def get_available_models(self) -> List[str]:
+        """
+        Get a list of available embedding models.
+        
+        Returns:
+            List of available model names
+        """
+        try:
+            from fastembed import TextEmbedding
+            models = TextEmbedding.list_supported_models()
+            return [model['model'] for model in models]
+        except Exception as e:
+            print(f"Warning: Could not retrieve available models: {e}", file=sys.stderr)
+            return self.FALLBACK_MODELS
+
+
 class BaseOperation(ABC):
     """Abstract base class for all CLI operations."""
 
@@ -1393,6 +1802,7 @@ class ConfigurationManager:
         """Initialize the configuration manager."""
         self.builder = CLIConfigBuilder()
         self.validator = CLIValidator()
+        self._embedding_intelligence: Optional[EmbeddingModelIntelligence] = None
     
     def create_config_from_args(self, args: argparse.Namespace) -> IngestConfig:
         """
@@ -1459,9 +1869,129 @@ class ConfigurationManager:
             raise ValueError(f"Invalid configuration after overrides: {'; '.join(config_errors)}")
         
         return new_config
+    
+    async def create_intelligent_config_from_args(self, args: argparse.Namespace) -> IngestConfig:
+        """
+        Create a configuration with intelligent embedding model selection.
+        
+        This method uses embedding model intelligence to:
+        - Detect existing models from collections
+        - Select smart defaults for new collections
+        - Validate model compatibility
+        
+        Args:
+            args: Parsed command line arguments
+            
+        Returns:
+            Validated IngestConfig with intelligent model selection
+            
+        Raises:
+            ValueError: If configuration is invalid or model is incompatible
+        """
+        # Validate arguments first
+        validation_errors = self.validator.validate_args(args)
+        if validation_errors:
+            raise ValueError(f"Invalid arguments: {'; '.join(validation_errors)}")
+        
+        # Build initial configuration
+        config = self.builder.build_config(args)
+        
+        # Initialize embedding intelligence if needed
+        if self._embedding_intelligence is None:
+            self._embedding_intelligence = EmbeddingModelIntelligence(config.qdrant_settings)
+        
+        # Apply intelligent embedding model selection
+        config = await self._apply_intelligent_embedding_selection(config, args)
+        
+        # Validate the final configuration
+        config_errors = config.validate_for_operation()
+        if config_errors:
+            raise ValueError(f"Invalid configuration: {'; '.join(config_errors)}")
+        
+        return config
+    
+    async def _apply_intelligent_embedding_selection(
+        self, 
+        config: IngestConfig, 
+        args: argparse.Namespace
+    ) -> IngestConfig:
+        """
+        Apply intelligent embedding model selection to the configuration.
+        
+        Args:
+            config: Base configuration
+            args: Original command line arguments
+            
+        Returns:
+            Updated configuration with intelligent model selection
+            
+        Raises:
+            ValueError: If model selection fails or model is incompatible
+        """
+        # Check if user explicitly specified an embedding model
+        # We need to check if the embedding was explicitly provided by the user
+        # vs being set to the default by the argument parser
+        user_specified_model = (
+            hasattr(args, 'embedding') and 
+            args.embedding != EmbeddingModelIntelligence.DEFAULT_MODEL and
+            # Additional check: if it's the default value, assume it wasn't user-specified
+            # unless we have a way to track this explicitly
+            getattr(args, '_embedding_explicitly_set', False)
+        )
+        
+        if config.cli_settings.operation_mode in ["ingest", "update"] and config.knowledgebase_name:
+            if user_specified_model:
+                # User specified a model, validate compatibility
+                model_info = await self._embedding_intelligence.validate_model_compatibility(
+                    args.embedding, config.knowledgebase_name
+                )
+                
+                if not model_info.is_available:
+                    if config.cli_settings.verbose:
+                        self._embedding_intelligence.display_model_info(model_info, verbose=True)
+                    raise ValueError(f"Specified embedding model '{args.embedding}' is not available: {model_info.error_message}")
+                
+                if not model_info.is_compatible:
+                    if config.cli_settings.verbose:
+                        self._embedding_intelligence.display_model_mismatch_error(model_info)
+                    raise ValueError(f"Specified embedding model '{args.embedding}' is incompatible with existing collection")
+                
+                # Model is valid and compatible, display info if verbose
+                if config.cli_settings.verbose:
+                    self._embedding_intelligence.display_model_info(model_info, verbose=True)
+                
+            else:
+                # No model specified, use smart default selection
+                model_info = await self._embedding_intelligence.select_smart_default(config.knowledgebase_name)
+                
+                if not model_info.is_available:
+                    if config.cli_settings.verbose:
+                        self._embedding_intelligence.display_model_info(model_info, verbose=True)
+                    raise ValueError(f"No compatible embedding model available: {model_info.error_message}")
+                
+                # Update configuration with selected model
+                config.embedding_settings.model_name = model_info.model_name
+                
+                # Display selection info if verbose
+                if config.cli_settings.verbose:
+                    if model_info.collection_exists:
+                        print(f"🔍 Detected existing collection model: {model_info.model_name}")
+                    else:
+                        print(f"🎯 Selected default model for new collection: {model_info.model_name}")
+                    self._embedding_intelligence.display_model_info(model_info, verbose=True)
+        
+        elif config.cli_settings.operation_mode == "list":
+            # For list operations, we don't need model validation
+            pass
+        
+        elif config.cli_settings.operation_mode == "remove":
+            # For remove operations, we don't need model validation
+            pass
+        
+        return config
 
 
-def parse_and_validate_args(args: Optional[List[str]] = None) -> IngestConfig:
+async def parse_and_validate_args_intelligent(args: Optional[List[str]] = None) -> IngestConfig:
     """
     Parse and validate CLI arguments, returning configuration.
     
@@ -1481,8 +2011,8 @@ def parse_and_validate_args(args: Optional[List[str]] = None) -> IngestConfig:
         # Parse arguments
         parsed_args = parser.parse_args(args)
         
-        # Create and validate configuration
-        config = config_manager.create_config_from_args(parsed_args)
+        # Create and validate configuration with intelligent model selection
+        config = await config_manager.create_intelligent_config_from_args(parsed_args)
         
         return config
         
@@ -1500,13 +2030,30 @@ def parse_and_validate_args(args: Optional[List[str]] = None) -> IngestConfig:
         sys.exit(1)
 
 
-def main():
-    """Main entry point for the CLI tool."""
+def parse_and_validate_args(args: Optional[List[str]] = None) -> IngestConfig:
+    """
+    Synchronous wrapper for parse_and_validate_args_intelligent.
+    
+    Args:
+        args: Command line arguments (None to use sys.argv)
+        
+    Returns:
+        Validated IngestConfig object
+        
+    Raises:
+        SystemExit: If arguments are invalid or configuration cannot be built
+    """
+    return asyncio.run(parse_and_validate_args_intelligent(args))
+
+
+async def main_async():
+    """Async main entry point for the CLI tool."""
     try:
-        config = parse_and_validate_args()
+        config = await parse_and_validate_args_intelligent()
         print(f"Configuration built successfully for command: {config.cli_settings.operation_mode}")
         print(f"Target path: {config.target_path}")
         print(f"Knowledgebase: {config.knowledgebase_name}")
+        print(f"Embedding model: {config.embedding_settings.model_name}")
         # Actual operation execution will be implemented in later tasks
     except KeyboardInterrupt:
         print("\nOperation cancelled by user", file=sys.stderr)
@@ -1514,6 +2061,11 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def main():
+    """Main entry point for the CLI tool."""
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

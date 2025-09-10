@@ -1377,21 +1377,701 @@ class EmbeddingModelIntelligence:
 
 
 class BaseOperation(ABC):
-    """Abstract base class for all CLI operations."""
+    """
+    Abstract base class for all CLI operations.
+    
+    This class provides shared functionality for all knowledge base operations
+    including configuration management, Qdrant connection setup, and common
+    validation patterns.
+    """
 
     def __init__(self, config: IngestConfig):
-        """Initialize operation with configuration."""
+        """
+        Initialize operation with configuration.
+        
+        Args:
+            config: Complete configuration for the operation
+        """
         self.config = config
+        self._connector: Optional[QdrantConnector] = None
+        self._embedding_provider: Optional[EmbeddingProvider] = None
 
     @abstractmethod
     async def execute(self) -> OperationResult:
-        """Execute the operation and return results."""
+        """
+        Execute the operation and return results.
+        
+        Returns:
+            OperationResult with execution details and statistics
+        """
         pass
 
     @abstractmethod
     def validate_preconditions(self) -> List[str]:
-        """Validate operation preconditions and return any error messages."""
+        """
+        Validate operation preconditions and return any error messages.
+        
+        Returns:
+            List of validation error messages (empty if valid)
+        """
         pass
+
+    async def get_connector(self) -> QdrantConnector:
+        """
+        Get or create a QdrantConnector instance.
+        
+        Returns:
+            Configured QdrantConnector instance
+            
+        Raises:
+            ValueError: If connector cannot be created
+        """
+        if self._connector is None:
+            try:
+                # Create embedding provider
+                self._embedding_provider = create_embedding_provider(self.config.embedding_settings)
+                
+                # Create connector
+                self._connector = QdrantConnector(
+                    qdrant_url=self.config.qdrant_settings.location,
+                    qdrant_api_key=self.config.qdrant_settings.api_key,
+                    collection_name=self.config.knowledgebase_name or "default",
+                    embedding_provider=self._embedding_provider,
+                    qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None)
+                )
+                
+            except Exception as e:
+                raise ValueError(f"Failed to create Qdrant connector: {e}") from e
+        
+        return self._connector
+
+    async def check_collection_exists(self, collection_name: str) -> bool:
+        """
+        Check if a collection exists in Qdrant.
+        
+        Args:
+            collection_name: Name of the collection to check
+            
+        Returns:
+            True if collection exists, False otherwise
+        """
+        try:
+            connector = await self.get_connector()
+            collection_names = await connector.get_collection_names()
+            return collection_name in collection_names
+        except Exception:
+            return False
+
+    def _log_verbose(self, message: str) -> None:
+        """
+        Log a message if verbose mode is enabled.
+        
+        Args:
+            message: Message to log
+        """
+        if self.config.cli_settings.verbose:
+            print(f"ℹ️  {message}")
+
+    def _log_info(self, message: str) -> None:
+        """
+        Log an informational message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"📝 {message}")
+
+    def _log_success(self, message: str) -> None:
+        """
+        Log a success message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"✅ {message}")
+
+    def _log_warning(self, message: str) -> None:
+        """
+        Log a warning message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"⚠️  {message}")
+
+    def _log_error(self, message: str) -> None:
+        """
+        Log an error message.
+        
+        Args:
+            message: Message to log
+        """
+        print(f"❌ {message}", file=sys.stderr)
+
+    def _confirm_operation(self, message: str) -> bool:
+        """
+        Ask user for confirmation unless force mode is enabled.
+        
+        Args:
+            message: Confirmation message to display
+            
+        Returns:
+            True if user confirms or force mode is enabled, False otherwise
+        """
+        if self.config.cli_settings.force_operation:
+            return True
+        
+        try:
+            response = input(f"{message} (y/N): ").strip().lower()
+            return response in ['y', 'yes']
+        except (EOFError, KeyboardInterrupt):
+            print("\nOperation cancelled by user")
+            return False
+
+
+class IngestOperation(BaseOperation):
+    """
+    Handles file ingestion into new or existing collections.
+    
+    This operation discovers files, processes their content, and stores them
+    in Qdrant collections with appropriate metadata and chunking.
+    """
+
+    async def execute(self) -> OperationResult:
+        """
+        Execute the ingestion operation.
+        
+        Returns:
+            OperationResult with ingestion statistics
+        """
+        start_time = datetime.now()
+        result = OperationResult(success=False)
+        
+        try:
+            # Validate preconditions
+            validation_errors = self.validate_preconditions()
+            if validation_errors:
+                result.errors.extend(validation_errors)
+                return result
+            
+            self._log_info(f"Starting ingestion into collection '{self.config.knowledgebase_name}'")
+            
+            if self.config.cli_settings.dry_run:
+                self._log_info("DRY RUN MODE - No changes will be made")
+            
+            # Discover files
+            file_discovery = FileDiscovery(self.config.cli_settings.supported_extensions)
+            discovered_files = await file_discovery.discover_files(
+                self.config.target_path,
+                self.config.cli_settings.include_patterns,
+                self.config.cli_settings.exclude_patterns
+            )
+            
+            if not discovered_files:
+                self._log_warning("No files found matching the specified criteria")
+                result.success = True
+                return result
+            
+            discovery_stats = file_discovery.get_discovery_stats(discovered_files)
+            self._log_info(f"Discovered {discovery_stats['total_files']} files ({discovery_stats['total_size']} bytes)")
+            
+            if self.config.cli_settings.verbose:
+                self._log_verbose(f"File types: {discovery_stats['extensions']}")
+            
+            # Process files
+            content_processor = ContentProcessor()
+            processed_entries = []
+            
+            for file_info in discovered_files:
+                try:
+                    entry = await content_processor.process_file(file_info)
+                    if entry:
+                        processed_entries.append(entry)
+                        result.files_processed += 1
+                    else:
+                        result.files_skipped += 1
+                        if self.config.cli_settings.verbose:
+                            self._log_verbose(f"Skipped: {file_info.path}")
+                except Exception as e:
+                    result.files_failed += 1
+                    result.errors.append(f"Failed to process {file_info.path}: {e}")
+                    self._log_error(f"Failed to process {file_info.path}: {e}")
+            
+            if not processed_entries:
+                self._log_warning("No files could be processed successfully")
+                result.success = True
+                return result
+            
+            # Store entries in Qdrant (unless dry run)
+            if not self.config.cli_settings.dry_run:
+                connector = await self.get_connector()
+                
+                # Store entries and get chunk count
+                for entry in processed_entries:
+                    try:
+                        await connector.store_entry(entry)
+                        # Estimate chunks created (actual chunking happens in QdrantConnector)
+                        estimated_chunks = max(1, len(entry.content) // 1000)  # Rough estimate
+                        result.chunks_created += estimated_chunks
+                    except Exception as e:
+                        result.errors.append(f"Failed to store entry: {e}")
+                        self._log_error(f"Failed to store entry: {e}")
+            else:
+                # In dry run, just estimate chunks
+                for entry in processed_entries:
+                    estimated_chunks = max(1, len(entry.content) // 1000)
+                    result.chunks_created += estimated_chunks
+            
+            # Calculate execution time
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            result.success = True
+            
+            # Log summary
+            self._log_success(f"Ingestion completed successfully")
+            self._log_info(f"Files processed: {result.files_processed}")
+            self._log_info(f"Files skipped: {result.files_skipped}")
+            self._log_info(f"Estimated chunks created: {result.chunks_created}")
+            if result.files_failed > 0:
+                self._log_warning(f"Files failed: {result.files_failed}")
+            
+            return result
+            
+        except Exception as e:
+            result.errors.append(f"Ingestion failed: {e}")
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            self._log_error(f"Ingestion failed: {e}")
+            return result
+
+    def validate_preconditions(self) -> List[str]:
+        """
+        Validate preconditions for ingestion operation.
+        
+        Returns:
+            List of validation error messages
+        """
+        errors = []
+        
+        # Check target path exists
+        if not self.config.target_path or not self.config.target_path.exists():
+            errors.append(f"Target path does not exist: {self.config.target_path}")
+        
+        # Check knowledgebase name is provided
+        if not self.config.knowledgebase_name:
+            errors.append("Knowledgebase name is required for ingestion")
+        
+        # Validate Qdrant settings
+        if not self.config.qdrant_settings.location:
+            errors.append("Qdrant URL is required")
+        
+        # Validate embedding settings
+        if not self.config.embedding_settings.model_name:
+            errors.append("Embedding model name is required")
+        
+        return errors
+
+
+class UpdateOperation(BaseOperation):
+    """
+    Handles updating existing collections with new content.
+    
+    Supports both add-only mode (append new files) and replace mode
+    (clear collection and replace with new content).
+    """
+
+    async def execute(self) -> OperationResult:
+        """
+        Execute the update operation.
+        
+        Returns:
+            OperationResult with update statistics
+        """
+        start_time = datetime.now()
+        result = OperationResult(success=False)
+        
+        try:
+            # Validate preconditions
+            validation_errors = self.validate_preconditions()
+            if validation_errors:
+                result.errors.extend(validation_errors)
+                return result
+            
+            collection_exists = await self.check_collection_exists(self.config.knowledgebase_name)
+            
+            if self.config.cli_settings.update_mode == "replace":
+                if collection_exists:
+                    self._log_info(f"Replace mode: Will clear existing collection '{self.config.knowledgebase_name}'")
+                    if not self._confirm_operation("⚠️  This will delete all existing data in the collection. Continue?"):
+                        self._log_info("Update cancelled by user")
+                        result.success = True
+                        return result
+                else:
+                    self._log_info(f"Collection '{self.config.knowledgebase_name}' does not exist, creating new collection")
+            else:
+                # Add-only mode
+                if collection_exists:
+                    self._log_info(f"Add-only mode: Will append to existing collection '{self.config.knowledgebase_name}'")
+                else:
+                    self._log_info(f"Collection '{self.config.knowledgebase_name}' does not exist, creating new collection")
+            
+            if self.config.cli_settings.dry_run:
+                self._log_info("DRY RUN MODE - No changes will be made")
+            
+            # Clear collection if replace mode
+            if (self.config.cli_settings.update_mode == "replace" and 
+                collection_exists and 
+                not self.config.cli_settings.dry_run):
+                
+                connector = await self.get_connector()
+                try:
+                    await connector.clear_collection()
+                    self._log_info("Existing collection cleared")
+                except Exception as e:
+                    result.errors.append(f"Failed to clear collection: {e}")
+                    self._log_error(f"Failed to clear collection: {e}")
+                    return result
+            
+            # Discover files
+            file_discovery = FileDiscovery(self.config.cli_settings.supported_extensions)
+            discovered_files = await file_discovery.discover_files(
+                self.config.target_path,
+                self.config.cli_settings.include_patterns,
+                self.config.cli_settings.exclude_patterns
+            )
+            
+            if not discovered_files:
+                self._log_warning("No files found matching the specified criteria")
+                result.success = True
+                return result
+            
+            discovery_stats = file_discovery.get_discovery_stats(discovered_files)
+            self._log_info(f"Discovered {discovery_stats['total_files']} files ({discovery_stats['total_size']} bytes)")
+            
+            # In add-only mode, filter out files that already exist
+            if (self.config.cli_settings.update_mode == "add-only" and 
+                collection_exists and 
+                not self.config.cli_settings.dry_run):
+                
+                discovered_files = await self._filter_existing_files(discovered_files)
+                if not discovered_files:
+                    self._log_info("All files already exist in collection, nothing to update")
+                    result.success = True
+                    return result
+                
+                self._log_info(f"After filtering existing files: {len(discovered_files)} files to process")
+            
+            # Process files (same as ingestion)
+            content_processor = ContentProcessor()
+            processed_entries = []
+            
+            for file_info in discovered_files:
+                try:
+                    entry = await content_processor.process_file(file_info)
+                    if entry:
+                        processed_entries.append(entry)
+                        result.files_processed += 1
+                    else:
+                        result.files_skipped += 1
+                        if self.config.cli_settings.verbose:
+                            self._log_verbose(f"Skipped: {file_info.path}")
+                except Exception as e:
+                    result.files_failed += 1
+                    result.errors.append(f"Failed to process {file_info.path}: {e}")
+                    self._log_error(f"Failed to process {file_info.path}: {e}")
+            
+            if not processed_entries:
+                self._log_warning("No files could be processed successfully")
+                result.success = True
+                return result
+            
+            # Store entries in Qdrant (unless dry run)
+            if not self.config.cli_settings.dry_run:
+                connector = await self.get_connector()
+                
+                for entry in processed_entries:
+                    try:
+                        await connector.store_entry(entry)
+                        estimated_chunks = max(1, len(entry.content) // 1000)
+                        result.chunks_created += estimated_chunks
+                    except Exception as e:
+                        result.errors.append(f"Failed to store entry: {e}")
+                        self._log_error(f"Failed to store entry: {e}")
+            else:
+                # In dry run, just estimate chunks
+                for entry in processed_entries:
+                    estimated_chunks = max(1, len(entry.content) // 1000)
+                    result.chunks_created += estimated_chunks
+            
+            # Calculate execution time
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            result.success = True
+            
+            # Log summary
+            mode_text = "replace" if self.config.cli_settings.update_mode == "replace" else "add-only"
+            self._log_success(f"Update completed successfully ({mode_text} mode)")
+            self._log_info(f"Files processed: {result.files_processed}")
+            self._log_info(f"Files skipped: {result.files_skipped}")
+            self._log_info(f"Estimated chunks created: {result.chunks_created}")
+            if result.files_failed > 0:
+                self._log_warning(f"Files failed: {result.files_failed}")
+            
+            return result
+            
+        except Exception as e:
+            result.errors.append(f"Update failed: {e}")
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            self._log_error(f"Update failed: {e}")
+            return result
+
+    def validate_preconditions(self) -> List[str]:
+        """
+        Validate preconditions for update operation.
+        
+        Returns:
+            List of validation error messages
+        """
+        errors = []
+        
+        # Check target path exists
+        if not self.config.target_path or not self.config.target_path.exists():
+            errors.append(f"Target path does not exist: {self.config.target_path}")
+        
+        # Check knowledgebase name is provided
+        if not self.config.knowledgebase_name:
+            errors.append("Knowledgebase name is required for update")
+        
+        # Validate Qdrant settings
+        if not self.config.qdrant_settings.location:
+            errors.append("Qdrant URL is required")
+        
+        # Validate embedding settings
+        if not self.config.embedding_settings.model_name:
+            errors.append("Embedding model name is required")
+        
+        # Validate update mode
+        if self.config.cli_settings.update_mode not in ["add-only", "replace"]:
+            errors.append(f"Invalid update mode: {self.config.cli_settings.update_mode}")
+        
+        return errors
+
+    async def _filter_existing_files(self, discovered_files: List[FileInfo]) -> List[FileInfo]:
+        """
+        Filter out files that already exist in the collection.
+        
+        Args:
+            discovered_files: List of discovered files
+            
+        Returns:
+            List of files that don't exist in the collection
+        """
+        # This is a simplified implementation
+        # In a real implementation, we would query the collection to check
+        # which files already exist based on file_path metadata
+        
+        # For now, return all files (actual implementation would require
+        # querying Qdrant collection metadata)
+        self._log_verbose("File existence filtering not yet implemented, processing all files")
+        return discovered_files
+
+
+class RemoveOperation(BaseOperation):
+    """
+    Handles knowledge base removal with confirmation prompts.
+    
+    This operation deletes entire Qdrant collections after user confirmation.
+    """
+
+    async def execute(self) -> OperationResult:
+        """
+        Execute the remove operation.
+        
+        Returns:
+            OperationResult with removal statistics
+        """
+        start_time = datetime.now()
+        result = OperationResult(success=False)
+        
+        try:
+            # Validate preconditions
+            validation_errors = self.validate_preconditions()
+            if validation_errors:
+                result.errors.extend(validation_errors)
+                return result
+            
+            # Check if collection exists
+            collection_exists = await self.check_collection_exists(self.config.knowledgebase_name)
+            
+            if not collection_exists:
+                self._log_info(f"Collection '{self.config.knowledgebase_name}' does not exist")
+                result.success = True
+                return result
+            
+            self._log_info(f"Found collection '{self.config.knowledgebase_name}'")
+            
+            if self.config.cli_settings.dry_run:
+                self._log_info("DRY RUN MODE - Collection would be deleted")
+                result.success = True
+                return result
+            
+            # Confirm deletion
+            if not self._confirm_operation(f"🗑️  Delete collection '{self.config.knowledgebase_name}' and all its data?"):
+                self._log_info("Removal cancelled by user")
+                result.success = True
+                return result
+            
+            # Delete collection
+            connector = await self.get_connector()
+            try:
+                await connector.delete_collection()
+                result.files_processed = 1  # Use this to indicate collection was deleted
+                self._log_success(f"Collection '{self.config.knowledgebase_name}' deleted successfully")
+            except Exception as e:
+                result.errors.append(f"Failed to delete collection: {e}")
+                self._log_error(f"Failed to delete collection: {e}")
+                return result
+            
+            # Calculate execution time
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            result.success = True
+            
+            return result
+            
+        except Exception as e:
+            result.errors.append(f"Remove operation failed: {e}")
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            self._log_error(f"Remove operation failed: {e}")
+            return result
+
+    def validate_preconditions(self) -> List[str]:
+        """
+        Validate preconditions for remove operation.
+        
+        Returns:
+            List of validation error messages
+        """
+        errors = []
+        
+        # Check knowledgebase name is provided
+        if not self.config.knowledgebase_name:
+            errors.append("Knowledgebase name is required for removal")
+        
+        # Validate Qdrant settings
+        if not self.config.qdrant_settings.location:
+            errors.append("Qdrant URL is required")
+        
+        return errors
+
+
+class ListOperation(BaseOperation):
+    """
+    Handles listing available knowledge bases with collection information.
+    
+    This operation displays all available collections with metadata like
+    size, embedding model, and compatibility information.
+    """
+
+    async def execute(self) -> OperationResult:
+        """
+        Execute the list operation.
+        
+        Returns:
+            OperationResult with listing statistics
+        """
+        start_time = datetime.now()
+        result = OperationResult(success=False)
+        
+        try:
+            # Validate preconditions
+            validation_errors = self.validate_preconditions()
+            if validation_errors:
+                result.errors.extend(validation_errors)
+                return result
+            
+            self._log_info("Listing available knowledge bases...")
+            
+            # Get connector (we need a temporary one for listing)
+            temp_embedding_settings = EmbeddingProviderSettings(
+                model_name="nomic-ai/nomic-embed-text-v1.5-Q"
+            )
+            temp_provider = create_embedding_provider(temp_embedding_settings)
+            
+            temp_connector = QdrantConnector(
+                qdrant_url=self.config.qdrant_settings.location,
+                qdrant_api_key=self.config.qdrant_settings.api_key,
+                collection_name="temp",  # Temporary name for listing
+                embedding_provider=temp_provider,
+                qdrant_local_path=getattr(self.config.qdrant_settings, 'local_path', None)
+            )
+            
+            # Get collection names
+            try:
+                collection_names = await temp_connector.get_collection_names()
+            except Exception as e:
+                result.errors.append(f"Failed to connect to Qdrant: {e}")
+                self._log_error(f"Failed to connect to Qdrant: {e}")
+                return result
+            
+            if not collection_names:
+                self._log_info("No knowledge bases found")
+                result.success = True
+                return result
+            
+            self._log_info(f"Found {len(collection_names)} knowledge base(s):")
+            print()
+            
+            # Display collection information
+            embedding_intelligence = EmbeddingModelIntelligence(self.config.qdrant_settings)
+            
+            for i, collection_name in enumerate(sorted(collection_names), 1):
+                print(f"{i}. {collection_name}")
+                
+                if self.config.cli_settings.verbose:
+                    # Get detailed collection information
+                    try:
+                        model_info = await embedding_intelligence.detect_collection_model(collection_name)
+                        if model_info:
+                            print(f"   Model: {model_info.collection_model or 'Unknown'}")
+                            print(f"   Dimensions: {model_info.collection_vector_size or 'Unknown'}")
+                            print(f"   Vector name: {model_info.collection_vector_name or 'Unknown'}")
+                        
+                        # Get collection compatibility info
+                        compatibility_info = await temp_connector.check_collection_compatibility(collection_name)
+                        if compatibility_info.get("exists"):
+                            available_vectors = compatibility_info.get("available_vectors", {})
+                            if available_vectors:
+                                total_vectors = sum(available_vectors.values())
+                                print(f"   Vectors: {total_vectors}")
+                        
+                    except Exception as e:
+                        print(f"   Error getting details: {e}")
+                
+                print()  # Empty line between collections
+            
+            result.files_processed = len(collection_names)  # Use this to indicate collections listed
+            result.success = True
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            
+            return result
+            
+        except Exception as e:
+            result.errors.append(f"List operation failed: {e}")
+            result.execution_time = (datetime.now() - start_time).total_seconds()
+            self._log_error(f"List operation failed: {e}")
+            return result
+
+    def validate_preconditions(self) -> List[str]:
+        """
+        Validate preconditions for list operation.
+        
+        Returns:
+            List of validation error messages
+        """
+        errors = []
+        
+        # Validate Qdrant settings
+        if not self.config.qdrant_settings.location:
+            errors.append("Qdrant URL is required")
+        
+        return errors
 
 
 class FileProcessor(ABC):

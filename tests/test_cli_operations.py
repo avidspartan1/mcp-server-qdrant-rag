@@ -5,7 +5,7 @@ Unit tests for CLI operation classes.
 import pytest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from typing import List
 
 from src.mcp_server_qdrant_rag.cli_ingest import (
@@ -219,3 +219,315 @@ class TestListOperationFunctionality:
         
         assert len(errors) >= 1
         assert any("Qdrant URL is required" in error for error in errors)
+    
+    @pytest.mark.asyncio
+    async def test_execute_no_collections(self):
+        """Test execution when no collections exist."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = False
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = []
+            
+            result = await operation.execute()
+            
+            assert result.success is True
+            assert result.files_processed == 0
+            assert len(result.errors) == 0
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_collections_basic(self):
+        """Test execution with collections in basic mode (non-verbose)."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = False
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = ["collection1", "collection2"]
+            
+            result = await operation.execute()
+            
+            assert result.success is True
+            assert result.files_processed == 2  # Number of collections listed
+            assert len(result.errors) == 0
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_collections_verbose(self):
+        """Test execution with collections in verbose mode."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = True
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = ["test_collection"]
+            mock_connector.analyze_collection_compatibility.return_value = {
+                "exists": True,
+                "points_count": 150,
+                "available_vectors": ["default"],
+                "expected_dimensions": 384,
+                "current_model": "nomic-ai/nomic-embed-text-v1.5-Q"
+            }
+            
+            result = await operation.execute()
+            
+            assert result.success is True
+            assert result.files_processed == 1
+            assert len(result.errors) == 0
+            
+            # Verify that analyze_collection_compatibility was called for verbose mode
+            mock_connector.analyze_collection_compatibility.assert_called_once_with("test_collection")
+    
+    @pytest.mark.asyncio
+    async def test_execute_connection_failure(self):
+        """Test execution when Qdrant connection fails."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = False
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.side_effect = Exception("Connection failed")
+            
+            result = await operation.execute()
+            
+            assert result.success is False
+            assert len(result.errors) == 1
+            assert "Failed to connect to Qdrant" in result.errors[0]
+    
+    @pytest.mark.asyncio
+    async def test_execute_compatibility_analysis_error(self):
+        """Test execution when compatibility analysis fails in verbose mode."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = True
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = ["test_collection"]
+            mock_connector.analyze_collection_compatibility.side_effect = Exception("Analysis failed")
+            
+            result = await operation.execute()
+            
+            # Should still succeed even if compatibility analysis fails
+            assert result.success is True
+            assert result.files_processed == 1
+            assert len(result.errors) == 0
+    
+    @pytest.mark.asyncio
+    async def test_execute_precondition_validation_failure(self):
+        """Test execution when precondition validation fails."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = None  # Missing URL
+        
+        operation = ListOperation(config)
+        
+        result = await operation.execute()
+        
+        assert result.success is False
+        assert len(result.errors) >= 1
+        assert any("Qdrant URL is required" in error for error in result.errors)
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_enhanced_verbose_output(self):
+        """Test execution with enhanced verbose output showing compatibility details."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = True
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = ["enhanced_collection"]
+            
+            # Mock enhanced compatibility info
+            mock_connector.analyze_collection_compatibility.return_value = {
+                "exists": True,
+                "points_count": 1500,
+                "available_vectors": ["default"],
+                "expected_dimensions": 384,
+                "actual_dimensions": 384,
+                "dimension_compatible": True,
+                "current_model": "nomic-ai/nomic-embed-text-v1.5-Q",
+                "has_chunked_content": True,
+                "has_non_chunked_content": False,
+                "mixed_content": False,
+                "compatible": True,
+                "recommendations": []
+            }
+            
+            result = await operation.execute()
+            
+            assert result.success is True
+            assert result.files_processed == 1
+            assert len(result.errors) == 0
+            
+            # Verify that analyze_collection_compatibility was called
+            mock_connector.analyze_collection_compatibility.assert_called_once_with("enhanced_collection")
+    
+    @pytest.mark.asyncio
+    async def test_execute_with_compatibility_issues(self):
+        """Test execution showing compatibility issues in verbose mode."""
+        from src.mcp_server_qdrant_rag.cli_ingest import ListOperation
+        
+        config = MagicMock()
+        config.qdrant_settings.location = "http://localhost:6333"
+        config.qdrant_settings.api_key = None
+        config.cli_settings.verbose = True
+        config.cli_settings.show_progress = True
+        config.cli_settings.batch_size = 10
+        
+        operation = ListOperation(config)
+        
+        with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider') as mock_create_provider, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.QdrantConnector') as mock_connector_class, \
+             patch('src.mcp_server_qdrant_rag.cli_ingest.EmbeddingProviderSettings') as mock_settings_class:
+            
+            mock_provider = MagicMock()
+            mock_create_provider.return_value = mock_provider
+            
+            mock_settings = MagicMock()
+            mock_settings.model_name = "nomic-ai/nomic-embed-text-v1.5-Q"
+            mock_settings_class.return_value = mock_settings
+            
+            mock_connector = AsyncMock()
+            mock_connector_class.return_value = mock_connector
+            mock_connector.get_collection_names.return_value = ["incompatible_collection"]
+            
+            # Mock compatibility issues
+            mock_connector.analyze_collection_compatibility.return_value = {
+                "exists": True,
+                "points_count": 500,
+                "available_vectors": ["default"],
+                "expected_dimensions": 384,
+                "actual_dimensions": 768,  # Dimension mismatch
+                "dimension_compatible": False,
+                "current_model": "different-model",
+                "has_chunked_content": True,
+                "has_non_chunked_content": True,
+                "mixed_content": True,
+                "compatible": False,
+                "recommendations": [
+                    "Dimension mismatch. Collection has 768 dimensions, but model produces 384",
+                    "Consider using a different collection name or switching to a compatible model",
+                    "Collection contains both chunked and non-chunked content"
+                ]
+            }
+            
+            result = await operation.execute()
+            
+            assert result.success is True
+            assert result.files_processed == 1
+            assert len(result.errors) == 0

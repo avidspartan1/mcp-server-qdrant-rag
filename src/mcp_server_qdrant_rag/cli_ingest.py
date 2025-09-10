@@ -2588,20 +2588,61 @@ class ListOperation(BaseOperation):
                         compatibility_info = await collection_connector.analyze_collection_compatibility(collection_name)
                         if compatibility_info.get("exists"):
                             points_count = compatibility_info.get("points_count", 0)
-                            print(f"   Points: {points_count}")
+                            print(f"   📊 Points: {points_count:,}")
                             
+                            # Show vector information
                             available_vectors = compatibility_info.get("available_vectors", [])
                             if available_vectors:
-                                print(f"   Vector names: {', '.join(available_vectors)}")
+                                print(f"   🔢 Vector names: {', '.join(available_vectors)}")
                             
+                            # Show dimensions with compatibility status
                             expected_dimensions = compatibility_info.get("expected_dimensions", "Unknown")
-                            print(f"   Dimensions: {expected_dimensions}")
+                            actual_dimensions = compatibility_info.get("actual_dimensions", expected_dimensions)
+                            dimension_compatible = compatibility_info.get("dimension_compatible", True)
                             
+                            if dimension_compatible:
+                                print(f"   📏 Dimensions: {actual_dimensions} ✅")
+                            else:
+                                print(f"   📏 Dimensions: {actual_dimensions} (expected: {expected_dimensions}) ⚠️")
+                            
+                            # Show embedding model
                             current_model = compatibility_info.get("current_model", "Unknown")
-                            print(f"   Model: {current_model}")
+                            print(f"   🤖 Model: {current_model}")
+                            
+                            # Show content type information
+                            has_chunked = compatibility_info.get("has_chunked_content", False)
+                            has_non_chunked = compatibility_info.get("has_non_chunked_content", False)
+                            mixed_content = compatibility_info.get("mixed_content", False)
+                            
+                            if mixed_content:
+                                print(f"   📄 Content: Mixed (chunked + non-chunked)")
+                            elif has_chunked:
+                                print(f"   📄 Content: Chunked documents")
+                            elif has_non_chunked:
+                                print(f"   📄 Content: Non-chunked documents")
+                            elif points_count == 0:
+                                print(f"   📄 Content: Empty collection")
+                            
+                            # Show compatibility status
+                            compatible = compatibility_info.get("compatible", True)
+                            if compatible:
+                                print(f"   ✅ Status: Compatible")
+                            else:
+                                print(f"   ⚠️  Status: Compatibility issues detected")
+                                
+                                # Show recommendations if any
+                                recommendations = compatibility_info.get("recommendations", [])
+                                if recommendations:
+                                    print(f"   💡 Recommendations:")
+                                    for rec in recommendations[:2]:  # Show first 2 recommendations
+                                        print(f"      • {rec}")
+                                    if len(recommendations) > 2:
+                                        print(f"      • ... and {len(recommendations) - 2} more")
+                        else:
+                            print(f"   ❌ Collection does not exist")
                         
                     except Exception as e:
-                        print(f"   Error getting details: {e}")
+                        print(f"   ❌ Error getting details: {e}")
                 
                 print()  # Empty line between collections
                 

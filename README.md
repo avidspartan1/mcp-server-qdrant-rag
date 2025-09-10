@@ -477,13 +477,13 @@ If NLTK data download fails completely, the system will automatically fall back 
 
 ### Graceful Shutdown
 
-The server includes proper signal handling for graceful shutdown. When using stdio transport, you can cleanly exit with Ctrl+C (SIGINT) or SIGTERM. The server will:
+The server includes proper signal handling for immediate shutdown. When using stdio transport, you can exit with Ctrl+C (SIGINT) or SIGTERM. The server will:
 
 - Catch the interrupt signal
-- Print a shutdown message
-- Exit cleanly without hanging
+- Print a shutdown message  
+- Force immediate exit without waiting for background threads
 
-This is particularly important when running with `uvx` or in containerized environments.
+This uses `os._exit()` to ensure the process terminates immediately, which is necessary because the stdio transport creates background threads that can prevent normal shutdown. This is particularly important when running with `uvx` or in containerized environments.
 
 ## Support for other tools
 

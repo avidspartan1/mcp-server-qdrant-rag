@@ -1,6 +1,8 @@
 import argparse
+import os
 import signal
 import sys
+import threading
 
 
 def main():
@@ -19,11 +21,20 @@ def main():
     )
     args = parser.parse_args()
 
-    # Set up signal handlers for graceful shutdown
+    # Set up signal handlers for forceful shutdown
     def signal_handler(signum, frame):
-        """Handle SIGINT (Ctrl+C) and SIGTERM gracefully."""
-        print("\nReceived interrupt signal. Shutting down gracefully...", file=sys.stderr)
-        sys.exit(0)
+        """Handle SIGINT (Ctrl+C) and SIGTERM with forceful shutdown."""
+        print("\nReceived interrupt signal. Shutting down...", file=sys.stderr)
+        
+        # Try graceful shutdown first
+        try:
+            # Give threads a moment to clean up
+            threading.Timer(0.1, lambda: None).start()
+        except:
+            pass
+        
+        # Force exit - this will terminate all threads
+        os._exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -37,7 +48,7 @@ def main():
     except KeyboardInterrupt:
         # Additional fallback for KeyboardInterrupt
         print("\nShutdown complete.", file=sys.stderr)
-        sys.exit(0)
+        os._exit(0)
     except Exception as e:
         print(f"Server error: {e}", file=sys.stderr)
         sys.exit(1)

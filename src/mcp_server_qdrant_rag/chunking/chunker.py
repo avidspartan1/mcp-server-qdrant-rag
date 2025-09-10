@@ -9,6 +9,7 @@ The chunker is designed to be modular, allowing easy swapping of sentence splitt
 and tokenizers while maintaining high-quality, embedding-friendly chunks.
 """
 
+import os
 import uuid
 import logging
 from typing import List, Optional, Dict, Any, Callable, Union
@@ -16,20 +17,49 @@ from typing import List, Optional, Dict, Any, Callable, Union
 # Import sentence splitters with fallbacks
 try:
     import nltk
+    import ssl
     from nltk.tokenize import sent_tokenize
+    
+    # Handle SSL certificate issues for NLTK downloads
+    try:
+        _create_unverified_https_context = ssl._create_unverified_context
+    except AttributeError:
+        # Legacy Python that doesn't verify HTTPS certificates by default
+        pass
+    else:
+        # Handle target environment that doesn't support HTTPS verification
+        ssl._create_default_https_context = _create_unverified_https_context
+    
+    # Set NLTK data path to a writable location if needed
+    nltk_data_dir = os.path.expanduser("~/nltk_data")
+    if not os.path.exists(nltk_data_dir):
+        os.makedirs(nltk_data_dir, exist_ok=True)
+    
+    # Add to NLTK data path if not already there
+    if nltk_data_dir not in nltk.data.path:
+        nltk.data.path.insert(0, nltk_data_dir)
+    
     # Download punkt tokenizer data if not already present
     try:
         nltk.data.find('tokenizers/punkt_tab')
     except LookupError:
         try:
-            nltk.download('punkt_tab', quiet=True)
+            nltk.download('punkt_tab', quiet=True, download_dir=nltk_data_dir)
         except:
             # Fallback to older punkt if punkt_tab fails
             try:
-                nltk.download('punkt', quiet=True)
+                nltk.download('punkt', quiet=True, download_dir=nltk_data_dir)
             except:
                 pass
-    NLTK_AVAILABLE = True
+    
+    # Test that sent_tokenize actually works
+    try:
+        sent_tokenize("Test sentence.")
+        NLTK_AVAILABLE = True
+    except Exception as e:
+        logger.debug(f"NLTK sent_tokenize test failed: {e}")
+        NLTK_AVAILABLE = False
+        
 except ImportError:
     NLTK_AVAILABLE = False
     sent_tokenize = None

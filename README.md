@@ -451,6 +451,30 @@ This will log:
 - Configuration validation results
 - Search performance metrics
 
+## Troubleshooting
+
+### NLTK SSL Certificate Issues
+
+If you encounter SSL certificate errors when the system tries to download NLTK data:
+
+```
+[nltk_data] Error loading punkt_tab: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED]
+```
+
+The system automatically handles this by disabling SSL verification for NLTK downloads. This is implemented using the standard approach:
+
+```python
+import ssl
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+```
+
+If NLTK data download fails completely, the system will automatically fall back to alternative sentence splitters (syntok or simple regex-based splitting), so functionality is maintained.
+
 ## Support for other tools
 
 This MCP server can be used with any MCP-compatible client. For example, you can use it with

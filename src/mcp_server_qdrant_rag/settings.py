@@ -10,13 +10,13 @@ from mcp_server_qdrant_rag.common.exceptions import ConfigurationValidationError
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOOL_STORE_DESCRIPTION = (
-    "Keep the memory for later use, when you are asked to remember something."
+    "Store information in the knowledge base for later retrieval and reference."
 )
 DEFAULT_TOOL_FIND_DESCRIPTION = (
-    "Look up memories in Qdrant. Use this tool when you need to: \n"
-    " - Find memories by their content \n"
-    " - Access memories for further analysis \n"
-    " - Get some personal information about the user"
+    "Search and retrieve information from the knowledge base. Use this tool when you need to: \n"
+    " - Find relevant documents or content by semantic similarity \n"
+    " - Access stored information for analysis or reference \n"
+    " - Query the knowledge base using natural language"
 )
 
 METADATA_PATH = "metadata"

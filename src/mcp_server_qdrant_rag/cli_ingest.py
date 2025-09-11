@@ -399,7 +399,7 @@ class ProgressReporter:
             else:
                 print(f"📦 Batch processed: {batch_size} items successfully")
         
-        self.update_progress(batch_size)
+        # Don't update progress counter during storage phase - it's separate from file processing
     
     def log_info(self, message: str) -> None:
         """

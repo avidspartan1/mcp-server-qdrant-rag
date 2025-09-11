@@ -18,6 +18,14 @@ DEFAULT_TOOL_FIND_DESCRIPTION = (
     " - Access stored information for analysis or reference \n"
     " - Query the knowledge base using natural language"
 )
+DEFAULT_TOOL_HYBRID_FIND_DESCRIPTION = (
+    "Advanced hybrid search of the knowledge base combining semantic similarity and keyword matching. "
+    "Use this tool when you need: \n"
+    " - Best search results by combining meaning and exact word matches \n"
+    " - More precise results than semantic search alone \n"
+    " - To find content that matches both concepts and specific terms \n"
+    " - Superior search quality using RRF or DBSF fusion methods"
+)
 
 METADATA_PATH = "metadata"
 
@@ -34,6 +42,10 @@ class ToolSettings(BaseSettings):
     tool_find_description: str = Field(
         default=DEFAULT_TOOL_FIND_DESCRIPTION,
         validation_alias="TOOL_FIND_DESCRIPTION",
+    )
+    tool_hybrid_find_description: str = Field(
+        default=DEFAULT_TOOL_HYBRID_FIND_DESCRIPTION,
+        validation_alias="TOOL_HYBRID_FIND_DESCRIPTION",
     )
 
 

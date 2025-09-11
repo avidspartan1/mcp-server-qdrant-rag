@@ -31,11 +31,22 @@ A specialized Model Context Protocol server that provides intelligent document c
      - `collection_name` (string): Name of the collection to store the information in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
    - Returns: Confirmation message
 2. `qdrant-find`
-   - Retrieve relevant information from the Qdrant database
+   - Retrieve relevant information from the Qdrant database using semantic search
    - Input:
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
    - Returns: Information stored in the Qdrant database as separate messages
+3. `qdrant-hybrid-find`
+   - Advanced hybrid search combining semantic similarity and keyword matching using Qdrant's RRF/DBSF fusion
+   - Input:
+     - `query` (string): Query to use for searching
+     - `collection_name` (string): Name of the collection to search in. This field is required if there are no default collection name.
+                                   If there is a default collection name, this field is not enabled.
+     - `fusion_method` (string, optional): Fusion method - "rrf" (Reciprocal Rank Fusion) or "dbsf" (Distribution-Based Score Fusion). Default: "rrf"
+     - `dense_limit` (integer, optional): Maximum results from semantic search. Default: 20
+     - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20  
+     - `final_limit` (integer, optional): Final number of results after fusion. Default: 10
+   - Returns: Fused search results combining both semantic understanding and exact keyword matching
 
 ## Environment Variables
 
@@ -51,6 +62,7 @@ The configuration of the server is done using environment variables:
 | `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `nomic-ai/nomic-embed-text-v1.5-Q`                               |
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
+| `TOOL_HYBRID_FIND_DESCRIPTION` | Custom description for the hybrid find tool                   | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
 
 ### Document Chunking Configuration
 

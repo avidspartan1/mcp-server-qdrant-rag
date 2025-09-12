@@ -35,6 +35,7 @@ A specialized Model Context Protocol server that provides intelligent document c
    - Input:
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
+     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
    - Returns: Information stored in the Qdrant database as separate messages
 3. `qdrant-hybrid-find`
    - Advanced hybrid search combining semantic similarity and keyword matching using Qdrant's RRF/DBSF fusion
@@ -46,6 +47,7 @@ A specialized Model Context Protocol server that provides intelligent document c
      - `dense_limit` (integer, optional): Maximum results from semantic search. Default: 20
      - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20  
      - `final_limit` (integer, optional): Final number of results after fusion. Default: 10
+     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
    - Returns: Fused search results combining both semantic understanding and exact keyword matching
 
 ## Environment Variables
@@ -63,6 +65,52 @@ The configuration of the server is done using environment variables:
 | `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
 | `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
 | `TOOL_HYBRID_FIND_DESCRIPTION` | Custom description for the hybrid find tool                   | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+
+### Set Configuration and Metadata Filtering
+
+The server supports document categorization and set-based filtering for organizing and searching your knowledge base:
+
+| Name                     | Description                                                         | Default Value                                                     |
+|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
+| `QDRANT_SETS_CONFIG`     | Path to sets configuration file for semantic filtering              | `.qdrant_sets.json`                                               |
+
+### Sets Configuration File Format
+
+The sets configuration file (`.qdrant_sets.json` by default) defines document sets for categorization and filtering. Here's the format:
+
+```json
+{
+  "sets": {
+    "platform_code": {
+      "slug": "platform_code",
+      "description": "Platform Codebase",
+      "aliases": ["platform", "core platform", "main codebase"]
+    },
+    "api_docs": {
+      "slug": "api_docs",
+      "description": "API Documentation", 
+      "aliases": ["api", "documentation", "api reference"]
+    },
+    "frontend_code": {
+      "slug": "frontend_code",
+      "description": "Frontend Application Code",
+      "aliases": ["frontend", "ui", "client code"]
+    }
+  }
+}
+```
+
+**Configuration Properties:**
+- `slug`: Unique identifier for the set (used internally)
+- `description`: Human-readable description for semantic matching
+- `aliases`: Alternative names that can be used to reference the set
+
+**File Location Priority:**
+1. Command-line flag: `--sets-config /path/to/sets.json`
+2. Environment variable: `QDRANT_SETS_CONFIG=/path/to/sets.json`
+3. Default location: `.qdrant_sets.json` in current working directory
+
+If no configuration file exists, a default one will be created with common examples.
 
 ### Document Chunking Configuration
 
@@ -251,6 +299,22 @@ qdrant-ingest list
 qdrant-ingest remove my-docs
 ```
 
+### Document Metadata and Set Filtering
+
+```bash
+# Ingest with document type metadata
+qdrant-ingest /path/to/api-docs --document-type api_docs
+
+# Ingest with set identifier for grouping
+qdrant-ingest /path/to/platform-code --set platform_code
+
+# Combine metadata fields
+qdrant-ingest /path/to/requirements --document-type requirements --set platform_code
+
+# Use custom sets configuration file
+qdrant-ingest /path/to/docs --sets-config /path/to/custom-sets.json --set my_custom_set
+```
+
 ### Supported File Types
 
 The CLI tool automatically processes these file types:
@@ -318,7 +382,7 @@ MAX_CHUNK_SIZE=300 \
 CHUNK_OVERLAP=30
 ```
 
-### Claude Desktop Configuration with Chunking
+### Claude Desktop Configuration with Chunking and Set Filtering
 
 ```json
 {
@@ -333,7 +397,8 @@ CHUNK_OVERLAP=30
       "ENABLE_CHUNKING": "true",
       "MAX_CHUNK_SIZE": "512",
       "CHUNK_OVERLAP": "50",
-      "CHUNK_STRATEGY": "semantic"
+      "CHUNK_STRATEGY": "semantic",
+      "QDRANT_SETS_CONFIG": ".qdrant_sets.json"
     }
   }
 }
@@ -353,6 +418,223 @@ CHUNK_STRATEGY=semantic \
 QDRANT_SEARCH_LIMIT=20 \
 uvx mcp-server-qdrant-rag
 ```
+
+### Set-Based Filtering Configuration
+
+```bash
+# Enable set-based filtering with custom configuration
+QDRANT_URL="http://localhost:6333" \
+COLLECTION_NAME="organized-docs" \
+EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
+QDRANT_SETS_CONFIG="/path/to/my-sets.json" \
+uvx mcp-server-qdrant-rag
+```
+
+**Example Usage with Set Filtering:**
+
+1. **Ingest documents with metadata:**
+   ```bash
+   # Ingest API documentation
+   qdrant-ingest /path/to/api-docs --document-type api_docs --set api_documentation
+   
+   # Ingest platform code
+   qdrant-ingest /path/to/platform --document-type code --set platform_code
+   ```
+
+2. **Search with set filtering:**
+   - Use natural language to filter by set: "Find authentication examples in the platform code"
+   - The `set_filter` parameter accepts descriptions like "platform code", "api docs", or "frontend"
+   - Semantic matching automatically maps these to configured sets
+
+## Usage Examples
+
+### Complete Workflow: Organize and Search Documents
+
+Here's a complete example of using the semantic metadata filtering features:
+
+#### 1. Create Sets Configuration
+
+Create `.qdrant_sets.json` in your project directory:
+
+```json
+{
+  "sets": {
+    "platform_api": {
+      "slug": "platform_api",
+      "description": "Platform API Documentation",
+      "aliases": ["platform api", "api docs", "platform documentation"]
+    },
+    "frontend_code": {
+      "slug": "frontend_code", 
+      "description": "Frontend Application Code",
+      "aliases": ["frontend", "ui code", "client code", "react code"]
+    },
+    "backend_services": {
+      "slug": "backend_services",
+      "description": "Backend Services and Microservices",
+      "aliases": ["backend", "services", "microservices", "server code"]
+    }
+  }
+}
+```
+
+#### 2. Ingest Documents with Metadata
+
+```bash
+# Ingest API documentation
+qdrant-ingest /path/to/api-docs \
+  --document-type documentation \
+  --set platform_api \
+  --knowledgebase company-kb
+
+# Ingest frontend code
+qdrant-ingest /path/to/frontend-src \
+  --document-type code \
+  --set frontend_code \
+  --knowledgebase company-kb \
+  --include ".*\\.(js|jsx|ts|tsx)$"
+
+# Ingest backend services
+qdrant-ingest /path/to/backend-services \
+  --document-type code \
+  --set backend_services \
+  --knowledgebase company-kb \
+  --include ".*\\.(py|java|go)$"
+```
+
+#### 3. Search with Set Filtering
+
+Using the MCP tools in your LLM application:
+
+```python
+# Search only in API documentation
+results = await qdrant_find(
+    query="authentication endpoints",
+    collection_name="company-kb",
+    set_filter="platform api"  # Matches "platform_api" set
+)
+
+# Search only in frontend code
+results = await qdrant_find(
+    query="user authentication components", 
+    collection_name="company-kb",
+    set_filter="frontend code"  # Matches "frontend_code" set
+)
+
+# Search in backend services
+results = await qdrant_hybrid_find(
+    query="authentication service implementation",
+    collection_name="company-kb", 
+    set_filter="backend services"  # Matches "backend_services" set
+)
+```
+
+### Common Use Cases
+
+#### Code Organization
+
+```bash
+# Organize by component/service
+qdrant-ingest /path/to/auth-service --set auth_service --document-type code
+qdrant-ingest /path/to/user-service --set user_service --document-type code
+qdrant-ingest /path/to/payment-service --set payment_service --document-type code
+
+# Search within specific service
+# set_filter="auth service" will find auth_service documents
+```
+
+#### Documentation Management
+
+```bash
+# Organize documentation by type
+qdrant-ingest /path/to/api-specs --set api_specs --document-type specification
+qdrant-ingest /path/to/user-guides --set user_guides --document-type documentation
+qdrant-ingest /path/to/dev-guides --set dev_guides --document-type documentation
+
+# Search specific documentation type
+# set_filter="user guides" will find user_guides documents
+```
+
+#### Project-Based Organization
+
+```bash
+# Organize by project
+qdrant-ingest /path/to/project-a --set project_a --document-type mixed
+qdrant-ingest /path/to/project-b --set project_b --document-type mixed
+
+# Search within specific project
+# set_filter="project a" will find project_a documents
+```
+
+### Error Handling and Validation
+
+The system provides intelligent error handling with helpful guidance:
+
+```bash
+# Set not found - shows available options
+# "Error: No matching set found for 'unknown set'. Available sets: platform_api, frontend_code, backend_services"
+
+# Ambiguous match - requests clarification  
+# "Error: Multiple sets match 'code'. Please be more specific."
+
+# Configuration issues - graceful fallbacks
+# If configuration file missing: Creates default with common examples
+# If JSON invalid: Logs error, continues with empty configuration
+# If network issues: Provides connection troubleshooting tips
+```
+
+### Advanced Features
+
+**Semantic Set Matching**: The system uses intelligent fuzzy matching to understand natural language set references:
+- "platform api" → matches `platform_api` set
+- "react code" → matches `frontend_components` set  
+- "backend services" → matches `backend_services` set
+
+**Configuration Hot Reload**: Update set configurations without restarting:
+```bash
+# The server automatically detects configuration file changes
+# Or manually reload via MCP tool (if available)
+```
+
+**Validation and Debugging**: Built-in validation helps catch configuration issues:
+```bash
+# Enable debug logging to see semantic matching decisions
+FASTMCP_LOG_LEVEL=DEBUG uvx mcp-server-qdrant-rag
+
+# Test configuration with CLI
+qdrant-ingest list  # Shows loaded sets if configuration is valid
+```
+
+## Quick Reference
+
+### Set Filtering Cheat Sheet
+
+| Task | Command/Usage |
+|------|---------------|
+| **Ingest with set** | `qdrant-ingest /path --set my_set` |
+| **Ingest with type** | `qdrant-ingest /path --document-type docs` |
+| **Custom config** | `qdrant-ingest /path --sets-config /path/sets.json` |
+| **Search by set** | `set_filter="platform api"` in MCP tools |
+| **List knowledge bases** | `qdrant-ingest list` |
+| **Debug matching** | `FASTMCP_LOG_LEVEL=DEBUG` |
+
+### Environment Variables Summary
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `QDRANT_SETS_CONFIG` | Sets configuration file path | `/path/to/sets.json` |
+| `FASTMCP_LOG_LEVEL` | Enable debug logging | `DEBUG` |
+| `COLLECTION_NAME` | Default collection name | `my-knowledge-base` |
+
+### Common Set Filter Examples
+
+| Natural Language | Matches Set | Use Case |
+|------------------|-------------|----------|
+| "platform api" | `platform_api` | API documentation |
+| "frontend code" | `frontend_components` | UI components |
+| "backend services" | `backend_services` | Server code |
+| "database" | `database_schemas` | DB schemas |
+| "deployment" | `deployment_configs` | Infrastructure |
 
 ## Migration Guide
 
@@ -445,21 +727,23 @@ Choose chunk sizes based on your use case:
 
 ### Monitoring and Debugging
 
-Enable detailed logging to monitor chunking performance:
+Enable detailed logging to monitor performance and troubleshoot issues:
 
 ```bash
 FASTMCP_LOG_LEVEL=DEBUG \
 QDRANT_URL="http://localhost:6333" \
 COLLECTION_NAME="debug-collection" \
 ENABLE_CHUNKING=true \
+QDRANT_SETS_CONFIG=".qdrant_sets.json" \
 uvx mcp-server-qdrant-rag
 ```
 
 This will log:
-- Chunking decisions and statistics
-- Vector dimension validation
-- Configuration validation results
-- Search performance metrics
+- **Chunking**: Decisions and statistics
+- **Set Matching**: Semantic matching decisions and scores
+- **Configuration**: Validation results and file loading
+- **Search Performance**: Query timing and result counts
+- **Error Details**: Detailed error context and suggestions
 
 ## Troubleshooting
 
@@ -484,6 +768,40 @@ else:
 ```
 
 If NLTK data download fails completely, the system will automatically fall back to alternative sentence splitters (syntok or simple regex-based splitting), so functionality is maintained.
+
+### Set Configuration Issues
+
+Common issues with semantic metadata filtering and their solutions:
+
+**Configuration File Not Found:**
+```bash
+# Error: Sets configuration file not found
+# Solution: File will be auto-created with defaults, or specify path:
+QDRANT_SETS_CONFIG="/path/to/sets.json" uvx mcp-server-qdrant-rag
+```
+
+**Set Matching Failures:**
+```bash
+# Error: "No matching set found for 'my set'"
+# Solution: Check available sets and add aliases:
+qdrant-ingest list  # Shows configured sets
+# Add aliases to your .qdrant_sets.json file
+```
+
+**Ambiguous Set Matches:**
+```bash
+# Error: "Multiple sets match 'code'"
+# Solution: Be more specific in your query:
+# Instead of "code" use "frontend code" or "backend code"
+```
+
+**Metadata Not Filtering:**
+```bash
+# Issue: Set filter not working as expected
+# Debug: Enable verbose logging to see matching process:
+FASTMCP_LOG_LEVEL=DEBUG uvx mcp-server-qdrant-rag
+# Check that documents were ingested with correct set metadata
+```
 
 ### Graceful Shutdown
 

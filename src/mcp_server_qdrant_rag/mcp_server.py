@@ -69,6 +69,7 @@ class QdrantMCPServer(FastMCP):
         assert self.embedding_provider is not None, "Embedding provider is required"
 
         # Initialize set configuration and semantic matcher
+        self.sets_config_path = sets_config_path  # Store the original config path
         self.set_settings = SetSettings()
         if sets_config_path:
             self.set_settings.load_from_file(self.set_settings.get_config_file_path(sets_config_path))
@@ -155,6 +156,37 @@ class QdrantMCPServer(FastMCP):
             logger.info("Set Configurations: None loaded")
         
         logger.info("=== Configuration Complete ===")
+
+    async def reload_set_configurations(self, sets_config_path: Optional[str] = None) -> None:
+        """
+        Reload set configurations without server restart.
+        
+        Args:
+            sets_config_path: Optional path to configuration file. If None, uses current path.
+        """
+        try:
+            logger.info("Reloading set configurations...")
+            
+            # Create new settings instance and load configurations
+            new_set_settings = SetSettings()
+            if sets_config_path:
+                new_set_settings.load_from_file(new_set_settings.get_config_file_path(sets_config_path))
+            else:
+                # Use the same path as was used during initialization
+                if self.sets_config_path:
+                    new_set_settings.load_from_file(new_set_settings.get_config_file_path(self.sets_config_path))
+                else:
+                    new_set_settings.load_from_file()
+            
+            # Update the current settings and semantic matcher
+            self.set_settings = new_set_settings
+            self.semantic_matcher.reload_configurations(self.set_settings.sets)
+            
+            logger.info(f"Successfully reloaded {len(self.set_settings.sets)} set configurations")
+            
+        except Exception as e:
+            logger.error(f"Failed to reload set configurations: {e}")
+            raise
 
     def format_entry(self, entry: Entry) -> str:
         """
@@ -551,4 +583,43 @@ class QdrantMCPServer(FastMCP):
             analyze_compatibility_foo,
             name="qdrant-analyze-compatibility",
             description="Analyze collection compatibility for backward compatibility assessment. Helps identify issues when switching models or configurations.",
+        )
+
+        # Add set configuration reload tool
+        async def reload_sets_config(
+            ctx: Context,
+            config_path: Annotated[
+                Optional[str], 
+                Field(description="Optional path to sets configuration file. If not provided, reloads from current path.")
+            ] = None,
+        ) -> str:
+            """
+            Reload set configurations without restarting the server.
+            This allows updating set definitions and making them immediately available for search filtering.
+            
+            :param ctx: The context for the request.
+            :param config_path: Optional path to configuration file to reload from.
+            :return: Status message indicating success or failure.
+            """
+            await ctx.debug(f"Reloading set configurations from: {config_path or 'current path'}")
+            
+            try:
+                await self.reload_set_configurations(config_path)
+                
+                # Provide feedback about loaded sets
+                if self.set_settings.sets:
+                    set_list = [f"  • {slug}: {config.description}" for slug, config in self.set_settings.sets.items()]
+                    sets_info = "\n".join(set_list)
+                    return f"✅ Successfully reloaded {len(self.set_settings.sets)} set configurations:\n{sets_info}"
+                else:
+                    return "✅ Configuration reloaded successfully, but no sets are currently defined."
+                    
+            except Exception as e:
+                await ctx.debug(f"Set configuration reload failed: {e}")
+                return f"❌ Failed to reload set configurations: {str(e)}"
+
+        self.tool(
+            reload_sets_config,
+            name="qdrant-reload-sets-config",
+            description="Reload set configurations without restarting the server. Allows updating set definitions for search filtering.",
         )

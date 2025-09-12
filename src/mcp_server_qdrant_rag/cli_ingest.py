@@ -569,6 +569,7 @@ class CLISettings(BaseSettings):
             ".yaml",
             ".yml",
             ".rst",
+            ".hcl"
             ".tf",
             ".tftpl",
             ".tpl",

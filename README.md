@@ -14,8 +14,10 @@ This repository provides an enhanced MCP server for [Qdrant](https://qdrant.tech
 A specialized Model Context Protocol server that provides intelligent document chunking and semantic memory capabilities using Qdrant vector database. This enhanced version automatically splits large documents into optimal chunks for better retrieval performance, while maintaining full backward compatibility with the original MCP server.
 
 **Key Enhancements over upstream:**
+
 - **Intelligent Document Chunking**: Automatic splitting of large documents using semantic, sentence, or fixed strategies
 - **Configurable Chunking Parameters**: Customizable chunk sizes, overlap, and splitting strategies
+- **Semantic Metadata Filtering**: Advanced set-based filtering with natural language queries to organize and search document collections by category, project, or type
 - **Enhanced Retrieval Performance**: Optimized for better context retrieval from large documents
 - **Backward Compatibility**: Seamlessly works with existing collections and configurations
 
@@ -93,10 +95,10 @@ A specialized Model Context Protocol server that provides intelligent document c
    - Input:
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This field is required if there are no default collection name.
-                                   If there is a default collection name, this field is not enabled.
+       If there is a default collection name, this field is not enabled.
      - `fusion_method` (string, optional): Fusion method - "rrf" (Reciprocal Rank Fusion) or "dbsf" (Distribution-Based Score Fusion). Default: "rrf"
      - `dense_limit` (integer, optional): Maximum results from semantic search. Default: 20
-     - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20  
+     - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20
      - `final_limit` (integer, optional): Final number of results after fusion. Default: 10
      - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
    - Returns: Fused search results combining both semantic understanding and exact keyword matching
@@ -105,25 +107,25 @@ A specialized Model Context Protocol server that provides intelligent document c
 
 The configuration of the server is done using environment variables:
 
-| Name                     | Description                                                         | Default Value                                                     |
-|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
-| `QDRANT_URL`             | URL of the Qdrant server                                            | None                                                              |
-| `QDRANT_API_KEY`         | API key for the Qdrant server                                       | None                                                              |
-| `COLLECTION_NAME`        | Name of the default collection to use.                              | None                                                              |
-| `QDRANT_LOCAL_PATH`      | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                              |
-| `EMBEDDING_PROVIDER`     | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                       |
-| `EMBEDDING_MODEL`        | Name of the embedding model to use                                  | `nomic-ai/nomic-embed-text-v1.5-Q`                               |
-| `TOOL_STORE_DESCRIPTION` | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
-| `TOOL_FIND_DESCRIPTION`  | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
-| `TOOL_HYBRID_FIND_DESCRIPTION` | Custom description for the hybrid find tool                   | See default in [`settings.py`](src/mcp_server_qdrant/settings.py) |
+| Name                           | Description                                                         | Default Value                                                         |
+| ------------------------------ | ------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `QDRANT_URL`                   | URL of the Qdrant server                                            | None                                                                  |
+| `QDRANT_API_KEY`               | API key for the Qdrant server                                       | None                                                                  |
+| `COLLECTION_NAME`              | Name of the default collection to use.                              | None                                                                  |
+| `QDRANT_LOCAL_PATH`            | Path to the local Qdrant database (alternative to `QDRANT_URL`)     | None                                                                  |
+| `EMBEDDING_PROVIDER`           | Embedding provider to use (currently only "fastembed" is supported) | `fastembed`                                                           |
+| `EMBEDDING_MODEL`              | Name of the embedding model to use                                  | `nomic-ai/nomic-embed-text-v1.5-Q`                                    |
+| `TOOL_STORE_DESCRIPTION`       | Custom description for the store tool                               | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
+| `TOOL_FIND_DESCRIPTION`        | Custom description for the find tool                                | See default in [`settings.py`](src/mcp_server_qdrant_rag/settings.py) |
+| `TOOL_HYBRID_FIND_DESCRIPTION` | Custom description for the hybrid find tool                         | See default in [`settings.py`](src/mcp_server_qdrant/settings.py)     |
 
 ### Set Configuration and Metadata Filtering
 
 The server supports document categorization and set-based filtering for organizing and searching your knowledge base:
 
-| Name                     | Description                                                         | Default Value                                                     |
-|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
-| `QDRANT_SETS_CONFIG`     | Path to sets configuration file for semantic filtering              | `.qdrant_sets.json`                                               |
+| Name                 | Description                                            | Default Value       |
+| -------------------- | ------------------------------------------------------ | ------------------- |
+| `QDRANT_SETS_CONFIG` | Path to sets configuration file for semantic filtering | `.qdrant_sets.json` |
 
 ### Sets Configuration File Format
 
@@ -139,7 +141,7 @@ The sets configuration file (`.qdrant_sets.json` by default) defines document se
     },
     "api_docs": {
       "slug": "api_docs",
-      "description": "API Documentation", 
+      "description": "API Documentation",
       "aliases": ["api", "documentation", "api reference"]
     },
     "frontend_code": {
@@ -152,11 +154,13 @@ The sets configuration file (`.qdrant_sets.json` by default) defines document se
 ```
 
 **Configuration Properties:**
+
 - `slug`: Unique identifier for the set (used internally)
 - `description`: Human-readable description for semantic matching
 - `aliases`: Alternative names that can be used to reference the set
 
 **File Location Priority:**
+
 1. Command-line flag: `--sets-config /path/to/sets.json`
 2. Environment variable: `QDRANT_SETS_CONFIG=/path/to/sets.json`
 3. Default location: `.qdrant_sets.json` in current working directory
@@ -167,12 +171,12 @@ If no configuration file exists, a default one will be created with common examp
 
 The server now supports intelligent document chunking for improved retrieval performance with large documents:
 
-| Name                     | Description                                                         | Default Value                                                     |
-|--------------------------|---------------------------------------------------------------------|-------------------------------------------------------------------|
-| `ENABLE_CHUNKING`        | Enable automatic document chunking for large documents              | `true`                                                            |
-| `MAX_CHUNK_SIZE`         | Maximum size of document chunks in tokens/characters                | `512`                                                             |
-| `CHUNK_OVERLAP`          | Number of tokens/characters to overlap between chunks               | `50`                                                              |
-| `CHUNK_STRATEGY`         | Chunking strategy: `semantic`, `fixed`, or `sentence`               | `semantic`                                                        |
+| Name              | Description                                            | Default Value |
+| ----------------- | ------------------------------------------------------ | ------------- |
+| `ENABLE_CHUNKING` | Enable automatic document chunking for large documents | `true`        |
+| `MAX_CHUNK_SIZE`  | Maximum size of document chunks in tokens/characters   | `512`         |
+| `CHUNK_OVERLAP`   | Number of tokens/characters to overlap between chunks  | `50`          |
+| `CHUNK_STRATEGY`  | Chunking strategy: `semantic`, `fixed`, or `sentence`  | `semantic`    |
 
 Note: You cannot provide both `QDRANT_URL` and `QDRANT_LOCAL_PATH` at the same time.
 
@@ -185,7 +189,7 @@ Since `mcp-server-qdrant-rag` is based on FastMCP, it also supports all the Fast
 important ones are listed below:
 
 | Environment Variable                  | Description                                               | Default Value |
-|---------------------------------------|-----------------------------------------------------------|---------------|
+| ------------------------------------- | --------------------------------------------------------- | ------------- |
 | `FASTMCP_DEBUG`                       | Enable debug mode                                         | `false`       |
 | `FASTMCP_LOG_LEVEL`                   | Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO`        |
 | `FASTMCP_HOST`                        | Host address to bind the server to                        | `127.0.0.1`   |
@@ -199,7 +203,7 @@ important ones are listed below:
 
 ### Using uvx
 
-When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no specific installation is needed to directly run *mcp-server-qdrant-rag*.
+When using [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools) no specific installation is needed to directly run _mcp-server-qdrant-rag_.
 
 ```shell
 QDRANT_URL="http://localhost:6333" \
@@ -410,6 +414,7 @@ uvx mcp-server-qdrant-rag
 ### Different Chunking Strategies
 
 #### Semantic Chunking (Recommended)
+
 ```bash
 # Splits at sentence/paragraph boundaries for better context
 CHUNK_STRATEGY=semantic \
@@ -418,6 +423,7 @@ CHUNK_OVERLAP=50
 ```
 
 #### Fixed Chunking
+
 ```bash
 # Splits at fixed character/token boundaries
 CHUNK_STRATEGY=fixed \
@@ -426,6 +432,7 @@ CHUNK_OVERLAP=80
 ```
 
 #### Sentence Chunking
+
 ```bash
 # Splits at sentence boundaries only
 CHUNK_STRATEGY=sentence \
@@ -484,10 +491,11 @@ uvx mcp-server-qdrant-rag
 **Example Usage with Set Filtering:**
 
 1. **Ingest documents with metadata:**
+
    ```bash
    # Ingest API documentation
    qdrant-ingest /path/to/api-docs --document-type api_docs --set api_documentation
-   
+
    # Ingest platform code
    qdrant-ingest /path/to/platform --document-type code --set platform_code
    ```
@@ -516,7 +524,7 @@ Create `.qdrant_sets.json` in your project directory:
       "aliases": ["platform api", "api docs", "platform documentation"]
     },
     "frontend_code": {
-      "slug": "frontend_code", 
+      "slug": "frontend_code",
       "description": "Frontend Application Code",
       "aliases": ["frontend", "ui code", "client code", "react code"]
     },
@@ -567,7 +575,7 @@ results = await qdrant_find(
 
 # Search only in frontend code
 results = await qdrant_find(
-    query="user authentication components", 
+    query="user authentication components",
     collection_name="company-kb",
     set_filter="frontend code"  # Matches "frontend_code" set
 )
@@ -575,7 +583,7 @@ results = await qdrant_find(
 # Search in backend services
 results = await qdrant_hybrid_find(
     query="authentication service implementation",
-    collection_name="company-kb", 
+    collection_name="company-kb",
     set_filter="backend services"  # Matches "backend_services" set
 )
 ```
@@ -625,7 +633,7 @@ The system provides intelligent error handling with helpful guidance:
 # Set not found - shows available options
 # "Error: No matching set found for 'unknown set'. Available sets: platform_api, frontend_code, backend_services"
 
-# Ambiguous match - requests clarification  
+# Ambiguous match - requests clarification
 # "Error: Multiple sets match 'code'. Please be more specific."
 
 # Configuration issues - graceful fallbacks
@@ -637,17 +645,20 @@ The system provides intelligent error handling with helpful guidance:
 ### Advanced Features
 
 **Semantic Set Matching**: The system uses intelligent fuzzy matching to understand natural language set references:
+
 - "platform api" → matches `platform_api` set
-- "react code" → matches `frontend_components` set  
+- "react code" → matches `frontend_components` set
 - "backend services" → matches `backend_services` set
 
 **Configuration Hot Reload**: Update set configurations without restarting:
+
 ```bash
 # The server automatically detects configuration file changes
 # Or manually reload via MCP tool (if available)
 ```
 
 **Validation and Debugging**: Built-in validation helps catch configuration issues:
+
 ```bash
 # Enable debug logging to see semantic matching decisions
 FASTMCP_LOG_LEVEL=DEBUG uvx mcp-server-qdrant-rag
@@ -660,32 +671,32 @@ qdrant-ingest list  # Shows loaded sets if configuration is valid
 
 ### Set Filtering Cheat Sheet
 
-| Task | Command/Usage |
-|------|---------------|
-| **Ingest with set** | `qdrant-ingest /path --set my_set` |
-| **Ingest with type** | `qdrant-ingest /path --document-type docs` |
-| **Custom config** | `qdrant-ingest /path --sets-config /path/sets.json` |
-| **Search by set** | `set_filter="platform api"` in MCP tools |
-| **List knowledge bases** | `qdrant-ingest list` |
-| **Debug matching** | `FASTMCP_LOG_LEVEL=DEBUG` |
+| Task                     | Command/Usage                                       |
+| ------------------------ | --------------------------------------------------- |
+| **Ingest with set**      | `qdrant-ingest /path --set my_set`                  |
+| **Ingest with type**     | `qdrant-ingest /path --document-type docs`          |
+| **Custom config**        | `qdrant-ingest /path --sets-config /path/sets.json` |
+| **Search by set**        | `set_filter="platform api"` in MCP tools            |
+| **List knowledge bases** | `qdrant-ingest list`                                |
+| **Debug matching**       | `FASTMCP_LOG_LEVEL=DEBUG`                           |
 
 ### Environment Variables Summary
 
-| Variable | Purpose | Example |
-|----------|---------|---------|
+| Variable             | Purpose                      | Example              |
+| -------------------- | ---------------------------- | -------------------- |
 | `QDRANT_SETS_CONFIG` | Sets configuration file path | `/path/to/sets.json` |
-| `FASTMCP_LOG_LEVEL` | Enable debug logging | `DEBUG` |
-| `COLLECTION_NAME` | Default collection name | `my-knowledge-base` |
+| `FASTMCP_LOG_LEVEL`  | Enable debug logging         | `DEBUG`              |
+| `COLLECTION_NAME`    | Default collection name      | `my-knowledge-base`  |
 
 ### Common Set Filter Examples
 
-| Natural Language | Matches Set | Use Case |
-|------------------|-------------|----------|
-| "platform api" | `platform_api` | API documentation |
-| "frontend code" | `frontend_components` | UI components |
-| "backend services" | `backend_services` | Server code |
-| "database" | `database_schemas` | DB schemas |
-| "deployment" | `deployment_configs` | Infrastructure |
+| Natural Language   | Matches Set           | Use Case          |
+| ------------------ | --------------------- | ----------------- |
+| "platform api"     | `platform_api`        | API documentation |
+| "frontend code"    | `frontend_components` | UI components     |
+| "backend services" | `backend_services`    | Server code       |
+| "database"         | `database_schemas`    | DB schemas        |
+| "deployment"       | `deployment_configs`  | Infrastructure    |
 
 ## Migration Guide
 
@@ -694,17 +705,20 @@ qdrant-ingest list  # Shows loaded sets if configuration is valid
 When upgrading to the new version with chunking support, existing deployments will continue to work without changes. However, to take advantage of the new features:
 
 #### Automatic Migration
+
 - **Existing collections**: Continue to work with non-chunked documents
 - **New documents**: Automatically use chunking if enabled
 - **Search**: Seamlessly works across both chunked and non-chunked content
 - **Backward compatibility**: Fully maintained
 
 #### Configuration Migration
+
 1. **Update embedding model** (optional but recommended):
+
    ```bash
    # Old default
    EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
-   
+
    # New default (better quality)
    EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q"
    ```
@@ -727,12 +741,15 @@ ConfigurationValidationError: Vector dimension mismatch: existing collection use
 ```
 
 **Solutions:**
+
 1. **Use a new collection** (recommended):
+
    ```bash
    COLLECTION_NAME="my-collection-v2"
    ```
 
 2. **Keep the old model** for existing collections:
+
    ```bash
    EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
    ```
@@ -747,26 +764,29 @@ ConfigurationValidationError: Vector dimension mismatch: existing collection use
 
 Choose chunk sizes based on your use case:
 
-| Use Case | Recommended Size | Overlap | Strategy | Reasoning |
-|----------|------------------|---------|----------|-----------|
-| **General documents** | 512 tokens | 50 tokens | `semantic` | Balanced performance and context |
-| **Code snippets** | 300 tokens | 30 tokens | `sentence` | Preserve function/class boundaries |
-| **Long articles** | 1024 tokens | 100 tokens | `semantic` | Better context for large content |
-| **Short notes** | 256 tokens | 25 tokens | `fixed` | Minimal overhead |
-| **Technical docs** | 768 tokens | 75 tokens | `semantic` | Good for structured content |
+| Use Case              | Recommended Size | Overlap    | Strategy   | Reasoning                          |
+| --------------------- | ---------------- | ---------- | ---------- | ---------------------------------- |
+| **General documents** | 512 tokens       | 50 tokens  | `semantic` | Balanced performance and context   |
+| **Code snippets**     | 300 tokens       | 30 tokens  | `sentence` | Preserve function/class boundaries |
+| **Long articles**     | 1024 tokens      | 100 tokens | `semantic` | Better context for large content   |
+| **Short notes**       | 256 tokens       | 25 tokens  | `fixed`    | Minimal overhead                   |
+| **Technical docs**    | 768 tokens       | 75 tokens  | `semantic` | Good for structured content        |
 
 ### Performance Optimization Tips
 
 1. **Chunk Size vs. Retrieval Quality**:
+
    - **Smaller chunks** (256-512): Better precision, faster search
    - **Larger chunks** (1024+): Better context, may reduce precision
 
 2. **Overlap Considerations**:
+
    - **10-15% overlap**: Good balance for most use cases
    - **Higher overlap** (20%+): Better for documents with complex references
    - **Lower overlap** (5%): Faster processing, less storage
 
 3. **Strategy Selection**:
+
    - **Semantic**: Best for natural language documents
    - **Sentence**: Good for structured content (code, lists)
    - **Fixed**: Fastest processing, predictable sizes
@@ -790,6 +810,7 @@ uvx mcp-server-qdrant-rag
 ```
 
 This will log:
+
 - **Chunking**: Decisions and statistics
 - **Set Matching**: Semantic matching decisions and scores
 - **Configuration**: Validation results and file loading
@@ -825,6 +846,7 @@ If NLTK data download fails completely, the system will automatically fall back 
 Common issues with semantic metadata filtering and their solutions:
 
 **Configuration File Not Found:**
+
 ```bash
 # Error: Sets configuration file not found
 # Solution: File will be auto-created with defaults, or specify path:
@@ -832,6 +854,7 @@ QDRANT_SETS_CONFIG="/path/to/sets.json" uvx mcp-server-qdrant-rag
 ```
 
 **Set Matching Failures:**
+
 ```bash
 # Error: "No matching set found for 'my set'"
 # Solution: Check available sets and add aliases:
@@ -840,6 +863,7 @@ qdrant-ingest list  # Shows configured sets
 ```
 
 **Ambiguous Set Matches:**
+
 ```bash
 # Error: "Multiple sets match 'code'"
 # Solution: Be more specific in your query:
@@ -847,6 +871,7 @@ qdrant-ingest list  # Shows configured sets
 ```
 
 **Metadata Not Filtering:**
+
 ```bash
 # Issue: Set filter not working as expected
 # Debug: Enable verbose logging to see matching process:
@@ -859,7 +884,7 @@ FASTMCP_LOG_LEVEL=DEBUG uvx mcp-server-qdrant-rag
 The server includes proper signal handling for immediate shutdown. When using stdio transport, you can exit with Ctrl+C (SIGINT) or SIGTERM. The server will:
 
 - Catch the interrupt signal
-- Print a shutdown message  
+- Print a shutdown message
 - Force immediate exit without waiting for background threads
 
 This uses `os._exit()` to ensure the process terminates immediately, which is necessary because the stdio transport creates background threads that can prevent normal shutdown. This is particularly important when running with `uvx` or in containerized environments.
@@ -932,22 +957,22 @@ existing codebase.
 
 1. Add the MCP server to Claude Code:
 
-    ```shell
-    # Add mcp-server-qdrant-rag configured for code search
-    claude mcp add code-search \
-    -e QDRANT_URL="http://localhost:6333" \
-    -e COLLECTION_NAME="code-repository" \
-    -e EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
-    -e TOOL_STORE_DESCRIPTION="Store code snippets with descriptions. The 'information' parameter should contain a natural language description of what the code does, while the actual code should be included in the 'metadata' parameter as a 'code' property." \
-    -e TOOL_FIND_DESCRIPTION="Search for relevant code snippets using natural language. The 'query' parameter should describe the functionality you're looking for." \
-    -- uvx mcp-server-qdrant-rag
-    ```
+   ```shell
+   # Add mcp-server-qdrant-rag configured for code search
+   claude mcp add code-search \
+   -e QDRANT_URL="http://localhost:6333" \
+   -e COLLECTION_NAME="code-repository" \
+   -e EMBEDDING_MODEL="nomic-ai/nomic-embed-text-v1.5-Q" \
+   -e TOOL_STORE_DESCRIPTION="Store code snippets with descriptions. The 'information' parameter should contain a natural language description of what the code does, while the actual code should be included in the 'metadata' parameter as a 'code' property." \
+   -e TOOL_FIND_DESCRIPTION="Search for relevant code snippets using natural language. The 'query' parameter should describe the functionality you're looking for." \
+   -- uvx mcp-server-qdrant-rag
+   ```
 
 2. Verify the server was added:
 
-    ```shell
-    claude mcp list
-    ```
+   ```shell
+   claude mcp list
+   ```
 
 #### Using Semantic Code Search in Claude Code
 
@@ -1043,12 +1068,16 @@ Or if you prefer using Docker, add this configuration instead:
         "command": "docker",
         "args": [
           "run",
-          "-p", "8000:8000",
+          "-p",
+          "8000:8000",
           "-i",
           "--rm",
-          "-e", "QDRANT_URL",
-          "-e", "QDRANT_API_KEY",
-          "-e", "COLLECTION_NAME",
+          "-e",
+          "QDRANT_URL",
+          "-e",
+          "QDRANT_API_KEY",
+          "-e",
+          "COLLECTION_NAME",
           "mcp-server-qdrant-rag"
         ],
         "env": {
@@ -1125,12 +1154,16 @@ For workspace configuration with Docker, use this in `.vscode/mcp.json`:
       "command": "docker",
       "args": [
         "run",
-        "-p", "8000:8000",
+        "-p",
+        "8000:8000",
         "-i",
         "--rm",
-        "-e", "QDRANT_URL",
-        "-e", "QDRANT_API_KEY",
-        "-e", "COLLECTION_NAME",
+        "-e",
+        "QDRANT_URL",
+        "-e",
+        "QDRANT_API_KEY",
+        "-e",
+        "COLLECTION_NAME",
         "mcp-server-qdrant-rag"
       ],
       "env": {

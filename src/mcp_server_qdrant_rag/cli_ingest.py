@@ -3855,6 +3855,9 @@ class CLIValidator:
         # Validate common arguments
         errors.extend(self._validate_qdrant_url(args.url))
         errors.extend(self._validate_regex_patterns(args))
+        
+        # Validate metadata arguments
+        errors.extend(self._validate_metadata_arguments(args))
 
         return errors
 
@@ -4013,6 +4016,91 @@ class CLIValidator:
         """Check if knowledgebase name is valid."""
         # Allow alphanumeric characters, hyphens, and underscores
         return bool(re.match(r"^[a-zA-Z0-9_-]+$", name))
+    
+    def _validate_metadata_arguments(self, args: argparse.Namespace) -> List[str]:
+        """Validate metadata arguments with actionable error messages."""
+        errors = []
+        
+        # Import validation functions
+        from .settings import validate_document_type, validate_set_id, MetadataValidationError
+        
+        # Validate document_type if provided
+        document_type = getattr(args, 'document_type', None)
+        if document_type is not None:
+            try:
+                validate_document_type(document_type)
+            except MetadataValidationError as e:
+                errors.append(
+                    f"❌ Invalid document type: {e}\n"
+                    f"   💡 Suggestions: {', '.join(e.suggestions) if e.suggestions else 'Use a descriptive type like code, docs, config'}"
+                )
+        
+        # Validate set if provided
+        set_value = getattr(args, 'set', None)
+        if set_value is not None:
+            try:
+                validate_set_id(set_value)
+            except MetadataValidationError as e:
+                errors.append(
+                    f"❌ Invalid set identifier: {e}\n"
+                    f"   💡 Suggestions: {', '.join(e.suggestions) if e.suggestions else 'Use format like platform_code, api-docs, frontend_ui'}"
+                )
+        
+        # Validate sets-config path if provided
+        sets_config = getattr(args, 'sets_config', None)
+        if sets_config is not None:
+            try:
+                self._validate_sets_config_path(sets_config)
+            except Exception as e:
+                errors.append(
+                    f"❌ Invalid sets configuration path: {e}\n"
+                    f"   💡 Ensure the path exists and is readable\n"
+                    f"   💡 Use absolute paths to avoid confusion\n"
+                    f"   💡 Check file permissions"
+                )
+        
+        return errors
+    
+    def _validate_sets_config_path(self, config_path: str) -> None:
+        """
+        Validate sets configuration file path.
+        
+        Args:
+            config_path: Path to sets configuration file
+            
+        Raises:
+            ValueError: When path is invalid
+            PermissionError: When path is not accessible
+        """
+        if not config_path or not config_path.strip():
+            raise ValueError("Sets configuration path cannot be empty")
+        
+        path = Path(config_path.strip())
+        
+        # Check if path exists
+        if not path.exists():
+            raise ValueError(f"Sets configuration file does not exist: {path}")
+        
+        # Check if it's a file
+        if not path.is_file():
+            raise ValueError(f"Sets configuration path must be a file, not a directory: {path}")
+        
+        # Check file extension
+        if path.suffix.lower() not in ['.json', '.jsonc']:
+            raise ValueError(f"Sets configuration file must have .json extension: {path}")
+        
+        # Check read permissions
+        if not os.access(path, os.R_OK):
+            raise PermissionError(f"Cannot read sets configuration file: {path}")
+        
+        # Try to parse as JSON to validate format
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Sets configuration file contains invalid JSON: {e}")
+        except Exception as e:
+            raise ValueError(f"Cannot read sets configuration file: {e}")
 
 
 class CLIConfigBuilder:

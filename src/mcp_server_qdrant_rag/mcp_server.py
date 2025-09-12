@@ -243,7 +243,7 @@ class QdrantMCPServer(FastMCP):
             ] = None,
         ) -> str:
             """
-            Store some information in Qdrant.
+            Store some information in Qdrant with metadata validation.
             :param ctx: The context for the request.
             :param information: The information to store.
             :param metadata: JSON metadata to store with the information, optional.
@@ -253,12 +253,23 @@ class QdrantMCPServer(FastMCP):
             """
             await ctx.debug(f"Storing information {information} in Qdrant")
 
-            entry = Entry(content=information, metadata=metadata)
+            # Validate and process metadata
+            try:
+                validated_metadata = await self._validate_and_process_metadata(ctx, metadata)
+            except Exception as e:
+                await ctx.debug(f"Metadata validation error: {e}")
+                return f"Error: {str(e)}"
 
-            await self.qdrant_connector.store(entry, collection_name=collection_name)
-            if collection_name:
-                return f"Remembered: {information} in collection {collection_name}"
-            return f"Remembered: {information}"
+            entry = Entry(content=information, metadata=validated_metadata)
+
+            try:
+                await self.qdrant_connector.store(entry, collection_name=collection_name)
+                if collection_name:
+                    return f"Remembered: {information} in collection {collection_name}"
+                return f"Remembered: {information}"
+            except Exception as e:
+                await ctx.debug(f"Storage error: {e}")
+                return f"Error storing information: {str(e)}"
 
         async def find(
             ctx: Context,
@@ -287,9 +298,24 @@ class QdrantMCPServer(FastMCP):
             await ctx.debug(f"Query filter: {query_filter}")
             await ctx.debug(f"Set filter: {set_filter}")
 
-            # Handle set filtering
+            # Handle set filtering with comprehensive validation and error handling
             if set_filter:
                 try:
+                    # Validate set_filter input
+                    if not isinstance(set_filter, str):
+                        await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
+                        return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
+                    
+                    set_filter = set_filter.strip()
+                    if not set_filter:
+                        await ctx.debug("Empty set_filter provided")
+                        return ["Error: set_filter cannot be empty"]
+                    
+                    if len(set_filter) > 200:
+                        await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
+                        return ["Error: set_filter cannot exceed 200 characters"]
+                    
+                    # Attempt semantic matching
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
@@ -326,7 +352,25 @@ class QdrantMCPServer(FastMCP):
                         
                 except SemanticMatchError as e:
                     await ctx.debug(f"Set matching error: {e}")
-                    return [f"Error: {str(e)}"]
+                    # Provide more helpful error messages based on error type
+                    from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
+                    
+                    if isinstance(e, NoMatchFoundError):
+                        available_sets = self.semantic_matcher.get_available_sets()
+                        if available_sets:
+                            error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
+                            if len(available_sets) > 5:
+                                error_msg += f" (and {len(available_sets) - 5} more)"
+                        else:
+                            error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
+                        return [f"Error: {error_msg}"]
+                    elif isinstance(e, AmbiguousMatchError):
+                        return [f"Error: {str(e)}. Please be more specific."]
+                    else:
+                        return [f"Error: Set filtering failed: {str(e)}"]
+                except Exception as e:
+                    await ctx.debug(f"Unexpected error in set filtering: {e}")
+                    return [f"Error: Unexpected error in set filtering: {str(e)}"]
 
             await ctx.debug(f"Finding results for query {query}")
 
@@ -389,9 +433,24 @@ class QdrantMCPServer(FastMCP):
             )
             await ctx.debug(f"Set filter: {set_filter}")
 
-            # Handle set filtering
+            # Handle set filtering with comprehensive validation and error handling
             if set_filter:
                 try:
+                    # Validate set_filter input
+                    if not isinstance(set_filter, str):
+                        await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
+                        return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
+                    
+                    set_filter = set_filter.strip()
+                    if not set_filter:
+                        await ctx.debug("Empty set_filter provided")
+                        return ["Error: set_filter cannot be empty"]
+                    
+                    if len(set_filter) > 200:
+                        await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
+                        return ["Error: set_filter cannot exceed 200 characters"]
+                    
+                    # Attempt semantic matching
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
@@ -428,7 +487,25 @@ class QdrantMCPServer(FastMCP):
                         
                 except SemanticMatchError as e:
                     await ctx.debug(f"Set matching error: {e}")
-                    return [f"Error: {str(e)}"]
+                    # Provide more helpful error messages based on error type
+                    from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
+                    
+                    if isinstance(e, NoMatchFoundError):
+                        available_sets = self.semantic_matcher.get_available_sets()
+                        if available_sets:
+                            error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
+                            if len(available_sets) > 5:
+                                error_msg += f" (and {len(available_sets) - 5} more)"
+                        else:
+                            error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
+                        return [f"Error: {error_msg}"]
+                    elif isinstance(e, AmbiguousMatchError):
+                        return [f"Error: {str(e)}. Please be more specific."]
+                    else:
+                        return [f"Error: Set filtering failed: {str(e)}"]
+                except Exception as e:
+                    await ctx.debug(f"Unexpected error in set filtering: {e}")
+                    return [f"Error: Unexpected error in set filtering: {str(e)}"]
             else:
                 parsed_query_filter = query_filter
 
@@ -645,3 +722,55 @@ class QdrantMCPServer(FastMCP):
             name="qdrant-reload-sets-config",
             description="Reload set configurations without restarting the server. Allows updating set definitions for search filtering.",
         )
+    async def _validate_and_process_metadata(self, ctx: Context, metadata: Metadata | None) -> Metadata | None:
+        """
+        Validate and process metadata with comprehensive error handling.
+        
+        Args:
+            ctx: MCP context for debugging
+            metadata: Raw metadata to validate
+            
+        Returns:
+            Validated metadata dictionary or None
+            
+        Raises:
+            ValueError: When metadata validation fails
+        """
+        if metadata is None:
+            return None
+        
+        await ctx.debug(f"Validating metadata: {metadata}")
+        
+        # Import validation functions
+        from .settings import validate_metadata_dict, validate_document_type, validate_set_id, MetadataValidationError
+        
+        try:
+            # Basic metadata structure validation
+            validated_metadata = validate_metadata_dict(metadata)
+            
+            if validated_metadata is None:
+                return None
+            
+            # Validate specific metadata fields if present
+            if 'document_type' in validated_metadata:
+                try:
+                    validated_metadata['document_type'] = validate_document_type(validated_metadata['document_type'])
+                except MetadataValidationError as e:
+                    raise ValueError(f"Invalid document_type: {e}")
+            
+            if 'set' in validated_metadata:
+                try:
+                    # Get available sets for validation
+                    available_sets = self.set_settings.sets if hasattr(self, 'set_settings') else None
+                    validated_metadata['set'] = validate_set_id(validated_metadata['set'], available_sets)
+                except MetadataValidationError as e:
+                    raise ValueError(f"Invalid set: {e}")
+            
+            await ctx.debug(f"Metadata validation successful: {validated_metadata}")
+            return validated_metadata
+            
+        except MetadataValidationError as e:
+            raise ValueError(str(e))
+        except Exception as e:
+            await ctx.debug(f"Unexpected metadata validation error: {e}")
+            raise ValueError(f"Metadata validation failed: {str(e)}")

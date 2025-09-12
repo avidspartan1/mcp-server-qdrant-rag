@@ -231,8 +231,9 @@ class TestSetSettings:
                         "aliases": ["valid"]
                     },
                     "invalid_set": {
-                        "slug": "",  # Invalid empty slug
-                        "description": "Invalid Set"
+                        "slug": "invalid_set",
+                        "description": "",  # Invalid empty description
+                        "aliases": []
                     }
                 }
             }

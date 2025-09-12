@@ -71,11 +71,15 @@ class SemanticSetMatcher:
         if not self.set_configurations:
             raise NoMatchFoundError(query, [])
         
-        # Try exact matches first
-        exact_match = self._find_exact_match(query)
-        if exact_match:
-            logger.debug(f"Found exact match: {exact_match}")
-            return exact_match
+        # Try exact matches first - but check for multiple exact matches
+        exact_matches = self._find_exact_matches(query)
+        if len(exact_matches) > 1:
+            # Multiple exact matches are ambiguous
+            exact_match_tuples = [(slug, 1.0) for slug in exact_matches]
+            raise AmbiguousMatchError(query, exact_match_tuples)
+        elif len(exact_matches) == 1:
+            logger.debug(f"Found exact match: {exact_matches[0]}")
+            return exact_matches[0]
         
         # Try fuzzy matching
         fuzzy_matches = self._find_fuzzy_matches(query)
@@ -95,31 +99,36 @@ class SemanticSetMatcher:
         logger.debug(f"Found fuzzy match: {matched_slug} (score: {best_score:.2f})")
         return matched_slug
     
-    def _find_exact_match(self, query: str) -> Optional[str]:
+    def _find_exact_matches(self, query: str) -> List[str]:
         """
-        Find exact matches against set slugs, descriptions, and aliases.
+        Find all exact matches against set slugs, descriptions, and aliases.
         
         Args:
             query: Normalized query string (lowercase, stripped)
             
         Returns:
-            Matching set slug or None if no exact match found
+            List of matching set slugs
         """
+        matches = []
+        
         for slug, config in self.set_configurations.items():
             # Check slug match
             if query == slug.lower():
-                return slug
+                matches.append(slug)
+                continue  # Don't check other fields for this set
             
             # Check description match
             if query == config.description.lower():
-                return slug
+                matches.append(slug)
+                continue  # Don't check aliases for this set
             
             # Check alias matches
             for alias in config.aliases:
                 if query == alias.lower():
-                    return slug
+                    matches.append(slug)
+                    break  # Don't check other aliases for this set
         
-        return None
+        return matches
     
     def _find_fuzzy_matches(self, query: str, min_score: float = 0.6) -> List[Tuple[str, float]]:
         """

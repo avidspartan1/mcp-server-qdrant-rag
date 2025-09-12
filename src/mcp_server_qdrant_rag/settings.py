@@ -1,15 +1,63 @@
-from typing import Literal, Dict, List, Optional
+from typing import Literal, Dict, List, Optional, Any
 import logging
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic import BaseModel, Field, model_validator, field_validator, ValidationError
 from pydantic_settings import BaseSettings
 
 from mcp_server_qdrant_rag.embeddings.types import EmbeddingProviderType
 from mcp_server_qdrant_rag.common.exceptions import ConfigurationValidationError
 
 logger = logging.getLogger(__name__)
+
+
+class SetConfigurationError(Exception):
+    """Base exception for set configuration errors."""
+    pass
+
+
+class SetConfigurationFileError(SetConfigurationError):
+    """Raised when set configuration file operations fail."""
+    
+    def __init__(self, file_path: Path, operation: str, original_error: Exception):
+        self.file_path = file_path
+        self.operation = operation
+        self.original_error = original_error
+        
+        message = f"Failed to {operation} set configuration file '{file_path}': {str(original_error)}"
+        super().__init__(message)
+
+
+class SetConfigurationValidationError(SetConfigurationError):
+    """Raised when set configuration validation fails."""
+    
+    def __init__(self, file_path: Path, validation_errors: List[str], valid_sets: int = 0):
+        self.file_path = file_path
+        self.validation_errors = validation_errors
+        self.valid_sets = valid_sets
+        
+        message = f"Set configuration validation failed for '{file_path}': {'; '.join(validation_errors)}"
+        if valid_sets > 0:
+            message += f" ({valid_sets} valid sets loaded)"
+        super().__init__(message)
+
+
+class MetadataValidationError(Exception):
+    """Raised when metadata field validation fails."""
+    
+    def __init__(self, field_name: str, field_value: Any, validation_error: str, suggestions: Optional[List[str]] = None):
+        self.field_name = field_name
+        self.field_value = field_value
+        self.validation_error = validation_error
+        self.suggestions = suggestions or []
+        
+        message = f"Invalid {field_name}: {validation_error}"
+        if suggestions:
+            message += f" Suggestions: {', '.join(suggestions)}"
+        super().__init__(message)
 
 DEFAULT_TOOL_STORE_DESCRIPTION = (
     "Store information in the knowledge base for later retrieval and reference."
@@ -97,68 +145,246 @@ class SetSettings(BaseSettings):
     
     def load_from_file(self, file_path: Optional[Path] = None) -> None:
         """
-        Load set configurations from a JSON file.
+        Load set configurations from a JSON file with comprehensive error handling.
         
         Args:
             file_path: Path to configuration file. If None, uses get_config_file_path()
+            
+        Raises:
+            SetConfigurationFileError: When file operations fail
+            SetConfigurationValidationError: When configuration validation fails
         """
         if file_path is None:
             file_path = self.get_config_file_path()
         
         logger.debug(f"Loading set configuration from: {file_path}")
         
+        # Check file accessibility
         try:
-            if not file_path.exists():
-                logger.info(f"Configuration file not found at {file_path}, creating default configuration")
+            self._validate_file_access(file_path)
+        except PermissionError as e:
+            logger.error(f"Permission denied accessing configuration file: {file_path}")
+            raise SetConfigurationFileError(file_path, "access", e)
+        except Exception as e:
+            logger.error(f"File access error for configuration file: {file_path}")
+            raise SetConfigurationFileError(file_path, "access", e)
+        
+        # Handle missing file
+        if not file_path.exists():
+            logger.info(f"Configuration file not found at {file_path}, creating default configuration")
+            try:
                 self.create_default_config(file_path)
                 return
-            
+            except Exception as e:
+                logger.error(f"Failed to create default configuration: {e}")
+                # Fall back to empty configuration
+                self.sets = {}
+                return
+        
+        # Load and parse configuration file
+        try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
-            
-            # Validate the configuration structure
-            if not isinstance(config_data, dict):
-                raise ValueError("Configuration file must contain a JSON object")
-            
-            sets_data = config_data.get('sets', {})
-            if not isinstance(sets_data, dict):
-                raise ValueError("'sets' field must be a JSON object")
-            
-            # Load and validate each set configuration
-            validated_sets = {}
-            for slug, set_data in sets_data.items():
-                try:
-                    # Validate the set data first, then ensure slug matches the key
-                    if isinstance(set_data, dict):
-                        # Only set slug if it's missing, don't override existing values
-                        if 'slug' not in set_data:
-                            set_data['slug'] = slug
-                    
-                    set_config = SetConfiguration.model_validate(set_data)
-                    validated_sets[slug] = set_config
-                    logger.debug(f"Loaded set configuration: {slug}")
-                except Exception as e:
-                    logger.warning(f"Skipping invalid set configuration '{slug}': {e}")
-                    continue
-            
-            self.sets = validated_sets
-            logger.info(f"Successfully loaded {len(self.sets)} set configurations")
-            
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in configuration file {file_path}: {e}")
-            logger.info("Creating default configuration due to JSON error")
-            self.create_default_config(file_path)
+            error_msg = f"JSON parsing error at line {e.lineno}, column {e.colno}: {e.msg}"
+            
+            # Try to create backup and default config
+            try:
+                self._backup_corrupted_config(file_path)
+                logger.info("Creating default configuration due to JSON error")
+                self.create_default_config(file_path)
+                return
+            except Exception as backup_error:
+                logger.error(f"Failed to create backup or default config: {backup_error}")
+                raise SetConfigurationFileError(file_path, "parse", e)
         except Exception as e:
-            logger.error(f"Error loading configuration from {file_path}: {e}")
-            logger.info("Using empty configuration due to load error")
-            self.sets = {}
+            logger.error(f"Error reading configuration file {file_path}: {e}")
+            raise SetConfigurationFileError(file_path, "read", e)
+        
+        # Validate configuration structure
+        validation_errors = []
+        try:
+            self._validate_config_structure(config_data, validation_errors)
+        except Exception as e:
+            validation_errors.append(f"Structure validation failed: {str(e)}")
+        
+        if validation_errors:
+            logger.error(f"Configuration structure validation failed: {validation_errors}")
+            # Try to use partial configuration if possible
+            sets_data = config_data.get('sets', {}) if isinstance(config_data, dict) else {}
+        else:
+            sets_data = config_data.get('sets', {})
+        
+        # Load and validate individual set configurations
+        validated_sets = {}
+        set_validation_errors = []
+        
+        if isinstance(sets_data, dict):
+            for slug, set_data in sets_data.items():
+                try:
+                    validated_set = self._validate_and_load_set(slug, set_data)
+                    validated_sets[slug] = validated_set
+                    logger.debug(f"Loaded set configuration: {slug}")
+                except Exception as e:
+                    error_msg = f"Invalid set '{slug}': {str(e)}"
+                    set_validation_errors.append(error_msg)
+                    logger.warning(error_msg)
+                    continue
+        
+        # Update sets with validated configurations
+        self.sets = validated_sets
+        
+        # Report results
+        total_errors = len(validation_errors) + len(set_validation_errors)
+        if total_errors > 0:
+            all_errors = validation_errors + set_validation_errors
+            logger.warning(f"Configuration loaded with {total_errors} errors, {len(validated_sets)} valid sets")
+            
+            # Only raise exception if no valid sets were loaded and there were structural errors
+            # For structural errors with no valid sets, fall back to default configuration
+            if len(validated_sets) == 0 and validation_errors:
+                logger.info("Falling back to default configuration due to structural errors")
+                try:
+                    self.create_default_config(file_path)
+                    return
+                except Exception as e:
+                    logger.error(f"Failed to create default configuration: {e}")
+                    # If we can't create default config, raise the validation error
+                    raise SetConfigurationValidationError(file_path, all_errors, len(validated_sets))
+        else:
+            logger.info(f"Successfully loaded {len(validated_sets)} set configurations")
+    
+    def _validate_file_access(self, file_path: Path) -> None:
+        """
+        Validate file access permissions.
+        
+        Args:
+            file_path: Path to validate
+            
+        Raises:
+            PermissionError: When file access is denied
+            ValueError: When path is invalid
+        """
+        # Check if parent directory exists and is accessible
+        parent_dir = file_path.parent
+        if not parent_dir.exists():
+            # Try to create parent directory
+            try:
+                parent_dir.mkdir(parents=True, exist_ok=True)
+            except PermissionError:
+                raise PermissionError(f"Cannot create parent directory: {parent_dir}")
+        
+        # Check directory permissions
+        if not os.access(parent_dir, os.R_OK | os.W_OK):
+            raise PermissionError(f"Insufficient permissions for directory: {parent_dir}")
+        
+        # Check file permissions if it exists
+        if file_path.exists():
+            if not os.access(file_path, os.R_OK):
+                raise PermissionError(f"Cannot read configuration file: {file_path}")
+    
+    def _validate_config_structure(self, config_data: Any, validation_errors: List[str]) -> None:
+        """
+        Validate the overall configuration file structure.
+        
+        Args:
+            config_data: Parsed configuration data
+            validation_errors: List to append validation errors to
+        """
+        if not isinstance(config_data, dict):
+            validation_errors.append("Configuration file must contain a JSON object")
+            return
+        
+        # Check for required fields
+        if 'sets' not in config_data:
+            validation_errors.append("Configuration must contain a 'sets' field")
+            return
+        
+        sets_data = config_data['sets']
+        if not isinstance(sets_data, dict):
+            validation_errors.append("'sets' field must be a JSON object")
+            return
+        
+        # Validate version if present
+        if 'version' in config_data:
+            version = config_data['version']
+            if not isinstance(version, str):
+                validation_errors.append("'version' field must be a string")
+            elif version not in ['1.0']:
+                validation_errors.append(f"Unsupported configuration version: {version}")
+    
+    def _validate_and_load_set(self, slug: str, set_data: Any) -> SetConfiguration:
+        """
+        Validate and load a single set configuration.
+        
+        Args:
+            slug: Set slug from configuration key
+            set_data: Set configuration data
+            
+        Returns:
+            Validated SetConfiguration object
+            
+        Raises:
+            ValueError: When set configuration is invalid
+        """
+        if not isinstance(set_data, dict):
+            raise ValueError("Set configuration must be a JSON object")
+        
+        # Make a copy to avoid modifying original
+        set_data_copy = dict(set_data)
+        
+        # Ensure slug matches the key
+        if 'slug' not in set_data_copy:
+            set_data_copy['slug'] = slug
+        elif set_data_copy['slug'] != slug:
+            # If slugs don't match, check if the provided slug is valid
+            if not set_data_copy['slug'] or not set_data_copy['slug'].strip():
+                logger.warning(f"Set has empty slug, using key '{slug}' instead.")
+                set_data_copy['slug'] = slug
+            else:
+                logger.warning(f"Set slug mismatch: key='{slug}', slug='{set_data_copy['slug']}'. Using key value.")
+                set_data_copy['slug'] = slug
+        
+        # Validate using Pydantic model - this will catch empty slugs and other validation errors
+        try:
+            return SetConfiguration.model_validate(set_data_copy)
+        except ValidationError as e:
+            error_details = []
+            for error in e.errors():
+                field = '.'.join(str(loc) for loc in error['loc'])
+                error_details.append(f"{field}: {error['msg']}")
+            raise ValueError(f"Validation failed: {'; '.join(error_details)}")
+    
+    def _backup_corrupted_config(self, file_path: Path) -> None:
+        """
+        Create a backup of corrupted configuration file.
+        
+        Args:
+            file_path: Path to corrupted configuration file
+        """
+        if not file_path.exists():
+            return
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = file_path.with_suffix(f".backup_{timestamp}.json")
+        
+        try:
+            import shutil
+            shutil.copy2(file_path, backup_path)
+            logger.info(f"Created backup of corrupted configuration: {backup_path}")
+        except Exception as e:
+            logger.warning(f"Failed to create backup of corrupted configuration: {e}")
     
     def create_default_config(self, file_path: Path) -> None:
         """
-        Create a default configuration file with common examples.
+        Create a default configuration file with common examples and comprehensive error handling.
         
         Args:
             file_path: Path where to create the default configuration
+            
+        Raises:
+            SetConfigurationFileError: When file creation fails
         """
         default_sets = {
             "platform_code": SetConfiguration(
@@ -190,6 +416,7 @@ class SetSettings(BaseSettings):
         
         config_data = {
             "version": "1.0",
+            "description": "Set configurations for semantic filtering in Qdrant RAG server",
             "sets": {
                 slug: {
                     "slug": set_config.slug,
@@ -201,19 +428,354 @@ class SetSettings(BaseSettings):
         }
         
         try:
-            # Ensure parent directory exists
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Validate file path security
+            self._validate_file_path_security(file_path)
             
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            # Ensure parent directory exists with proper permissions
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                raise SetConfigurationFileError(file_path, "create parent directory", e)
+            
+            # Write configuration file
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, indent=2, ensure_ascii=False)
+            except PermissionError as e:
+                raise SetConfigurationFileError(file_path, "write", e)
+            except OSError as e:
+                raise SetConfigurationFileError(file_path, "write", e)
+            
+            # Verify file was created successfully
+            if not file_path.exists():
+                raise SetConfigurationFileError(file_path, "verify creation", 
+                                              Exception("File was not created"))
+            
+            # Verify file is readable
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    json.load(f)
+            except Exception as e:
+                raise SetConfigurationFileError(file_path, "verify readability", e)
             
             self.sets = default_sets
-            logger.info(f"Created default set configuration at {file_path}")
+            logger.info(f"Created default set configuration at {file_path} with {len(default_sets)} sets")
             
+        except SetConfigurationFileError:
+            # Re-raise our custom errors
+            raise
         except Exception as e:
-            logger.error(f"Failed to create default configuration at {file_path}: {e}")
+            logger.error(f"Unexpected error creating default configuration at {file_path}: {e}")
             # Use the default sets in memory even if we can't write to file
             self.sets = default_sets
+            raise SetConfigurationFileError(file_path, "create", e)
+    
+    def _validate_file_path_security(self, file_path: Path) -> None:
+        """
+        Validate file path for security concerns.
+        
+        Args:
+            file_path: Path to validate
+            
+        Raises:
+            ValueError: When path is potentially unsafe
+        """
+        # Resolve path to check for directory traversal
+        resolved_path = file_path.resolve()
+        
+        # Check if path tries to escape current working directory
+        try:
+            resolved_path.relative_to(Path.cwd())
+        except ValueError:
+            # Allow absolute paths that are explicitly set
+            if not file_path.is_absolute():
+                raise ValueError(f"Path appears to use directory traversal: {file_path}")
+        
+        # Check for suspicious path components
+        suspicious_components = ['..', '.', '~']
+        for component in file_path.parts:
+            if component in suspicious_components and len(file_path.parts) > 1:
+                logger.warning(f"Potentially suspicious path component '{component}' in {file_path}")
+        
+        # Ensure file extension is appropriate
+        if file_path.suffix.lower() not in ['.json', '.jsonc']:
+            logger.warning(f"Unusual file extension for configuration: {file_path.suffix}")
+    
+    def save_to_file(self, file_path: Optional[Path] = None) -> None:
+        """
+        Save current set configurations to a JSON file.
+        
+        Args:
+            file_path: Path to save configuration file. If None, uses get_config_file_path()
+            
+        Raises:
+            SetConfigurationFileError: When file operations fail
+        """
+        if file_path is None:
+            file_path = self.get_config_file_path()
+        
+        config_data = {
+            "version": "1.0",
+            "description": "Set configurations for semantic filtering in Qdrant RAG server",
+            "sets": {
+                slug: {
+                    "slug": set_config.slug,
+                    "description": set_config.description,
+                    "aliases": set_config.aliases
+                }
+                for slug, set_config in self.sets.items()
+            }
+        }
+        
+        try:
+            # Validate file path security
+            self._validate_file_path_security(file_path)
+            
+            # Ensure parent directory exists
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                raise SetConfigurationFileError(file_path, "create parent directory", e)
+            
+            # Write configuration file
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, indent=2, ensure_ascii=False)
+            except PermissionError as e:
+                raise SetConfigurationFileError(file_path, "write", e)
+            except OSError as e:
+                raise SetConfigurationFileError(file_path, "write", e)
+            
+            logger.info(f"Saved set configuration to {file_path}")
+            
+        except SetConfigurationFileError:
+            # Re-raise our custom errors
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error saving configuration to {file_path}: {e}")
+            raise SetConfigurationFileError(file_path, "save", e)
+
+
+def validate_document_type(document_type: Optional[str]) -> Optional[str]:
+    """
+    Validate document_type metadata field.
+    
+    Args:
+        document_type: Document type value to validate
+        
+    Returns:
+        Validated document type or None
+        
+    Raises:
+        MetadataValidationError: When validation fails
+    """
+    if document_type is None:
+        return None
+    
+    if not isinstance(document_type, str):
+        raise MetadataValidationError(
+            "document_type", 
+            document_type, 
+            "must be a string",
+            ["Use a string value like 'code', 'documentation', 'config'"]
+        )
+    
+    # Trim whitespace
+    document_type = document_type.strip()
+    
+    if not document_type:
+        raise MetadataValidationError(
+            "document_type",
+            document_type,
+            "cannot be empty or whitespace only",
+            ["Use a descriptive type like 'code', 'documentation', 'config'"]
+        )
+    
+    # Check length limits
+    if len(document_type) > 100:
+        raise MetadataValidationError(
+            "document_type",
+            document_type,
+            "cannot exceed 100 characters",
+            ["Use a shorter, more concise document type"]
+        )
+    
+    # Check for potentially problematic characters
+    import re
+    if not re.match(r'^[a-zA-Z0-9_\-\s\.]+$', document_type):
+        raise MetadataValidationError(
+            "document_type",
+            document_type,
+            "contains invalid characters (only alphanumeric, underscore, hyphen, space, and period allowed)",
+            ["Use only letters, numbers, underscores, hyphens, spaces, and periods"]
+        )
+    
+    # Normalize common variations
+    normalized_type = document_type.lower().replace(' ', '_').replace('-', '_')
+    
+    # Suggest common document types if the input seems unusual
+    common_types = {
+        'code', 'documentation', 'config', 'api', 'database', 'frontend', 
+        'backend', 'test', 'deployment', 'infrastructure', 'schema'
+    }
+    
+    if normalized_type not in common_types and len(normalized_type.split('_')) == 1:
+        suggestions = [t for t in common_types if t.startswith(normalized_type[:3])]
+        if suggestions:
+            logger.info(f"Document type '{document_type}' is valid but uncommon. "
+                       f"Consider using: {', '.join(suggestions)}")
+    
+    return document_type
+
+
+def validate_set_id(set_id: Optional[str], available_sets: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Validate set_id metadata field.
+    
+    Args:
+        set_id: Set ID value to validate
+        available_sets: Dictionary of available sets for validation (optional)
+        
+    Returns:
+        Validated set ID or None
+        
+    Raises:
+        MetadataValidationError: When validation fails
+    """
+    if set_id is None:
+        return None
+    
+    if not isinstance(set_id, str):
+        raise MetadataValidationError(
+            "set_id",
+            set_id,
+            "must be a string",
+            ["Use a string identifier like 'platform_code', 'api_docs'"]
+        )
+    
+    # Trim whitespace
+    set_id = set_id.strip()
+    
+    if not set_id:
+        raise MetadataValidationError(
+            "set_id",
+            set_id,
+            "cannot be empty or whitespace only",
+            ["Use a valid set identifier"]
+        )
+    
+    # Check length limits
+    if len(set_id) > 50:
+        raise MetadataValidationError(
+            "set_id",
+            set_id,
+            "cannot exceed 50 characters",
+            ["Use a shorter set identifier"]
+        )
+    
+    # Validate format (slug-like)
+    import re
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', set_id):
+        raise MetadataValidationError(
+            "set_id",
+            set_id,
+            "must be a valid slug (only alphanumeric characters, underscores, and hyphens allowed)",
+            ["Use format like 'platform_code', 'api-docs', 'frontend_ui'"]
+        )
+    
+    # Check against available sets if provided
+    if available_sets is not None:
+        if set_id not in available_sets:
+            available_list = list(available_sets.keys())
+            suggestions = []
+            
+            # Find similar set IDs
+            for available_set in available_list:
+                if set_id.lower() in available_set.lower() or available_set.lower() in set_id.lower():
+                    suggestions.append(available_set)
+            
+            if not suggestions and available_list:
+                suggestions = available_list[:5]  # Show first 5 as examples
+            
+            raise MetadataValidationError(
+                "set_id",
+                set_id,
+                f"is not a configured set",
+                suggestions if suggestions else ["Configure this set in your sets configuration file"]
+            )
+    
+    return set_id
+
+
+def validate_metadata_dict(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Validate metadata dictionary for common issues.
+    
+    Args:
+        metadata: Metadata dictionary to validate
+        
+    Returns:
+        Validated metadata dictionary or None
+        
+    Raises:
+        MetadataValidationError: When validation fails
+    """
+    if metadata is None:
+        return None
+    
+    if not isinstance(metadata, dict):
+        raise MetadataValidationError(
+            "metadata",
+            metadata,
+            "must be a dictionary",
+            ["Use a dictionary with string keys and simple values"]
+        )
+    
+    # Check for empty metadata
+    if not metadata:
+        return None
+    
+    # Validate keys and values
+    validated_metadata = {}
+    for key, value in metadata.items():
+        # Validate key
+        if not isinstance(key, str):
+            raise MetadataValidationError(
+                f"metadata key",
+                key,
+                "must be a string",
+                ["Use string keys for metadata fields"]
+            )
+        
+        if not key.strip():
+            raise MetadataValidationError(
+                f"metadata key",
+                key,
+                "cannot be empty or whitespace only",
+                ["Use descriptive string keys"]
+            )
+        
+        # Validate value types
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise MetadataValidationError(
+                f"metadata['{key}']",
+                value,
+                "must be a string, number, boolean, or null",
+                ["Use simple data types for metadata values"]
+            )
+        
+        # Check string value length
+        if isinstance(value, str) and len(value) > 1000:
+            raise MetadataValidationError(
+                f"metadata['{key}']",
+                value,
+                "string value cannot exceed 1000 characters",
+                ["Use shorter string values or store large content separately"]
+            )
+        
+        validated_metadata[key.strip()] = value
+    
+    return validated_metadata
     
     def save_to_file(self, file_path: Optional[Path] = None) -> None:
         """

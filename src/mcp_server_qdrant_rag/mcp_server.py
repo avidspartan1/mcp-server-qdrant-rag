@@ -288,34 +288,45 @@ class QdrantMCPServer(FastMCP):
             await ctx.debug(f"Set filter: {set_filter}")
 
             # Handle set filtering
-            combined_filter = query_filter
             if set_filter:
                 try:
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
-                    # Create set filter condition
-                    set_filter_condition = {
-                        "key": "set",
-                        "match": {"value": matched_set_slug}
-                    }
+                    # Create set filter condition using proper Qdrant field condition
+                    set_field_condition = models.FieldCondition(
+                        key="metadata.set",
+                        match=models.MatchValue(value=matched_set_slug)
+                    )
                     
                     # Combine with existing filter if present
-                    if combined_filter:
-                        combined_filter = {
-                            "must": [
-                                {"key": "set", "match": {"value": matched_set_slug}},
-                                combined_filter
-                            ]
-                        }
+                    if query_filter:
+                        # If query_filter is already a models.Filter, extract its conditions
+                        if isinstance(query_filter, models.Filter):
+                            existing_must = query_filter.must or []
+                            existing_must_not = query_filter.must_not or []
+                            existing_should = query_filter.should or []
+                        else:
+                            # If it's a dict, convert it to Filter first to extract conditions
+                            temp_filter = models.Filter(**query_filter)
+                            existing_must = temp_filter.must or []
+                            existing_must_not = temp_filter.must_not or []
+                            existing_should = temp_filter.should or []
+                        
+                        # Create combined filter with set condition added to must
+                        combined_must = [set_field_condition] + existing_must
+                        query_filter = models.Filter(
+                            must=combined_must,
+                            must_not=existing_must_not,
+                            should=existing_should
+                        )
                     else:
-                        combined_filter = set_filter_condition
+                        # Create new filter with just the set condition
+                        query_filter = models.Filter(must=[set_field_condition])
                         
                 except SemanticMatchError as e:
                     await ctx.debug(f"Set matching error: {e}")
                     return [f"Error: {str(e)}"]
-
-            query_filter = models.Filter(**combined_filter) if combined_filter else None
 
             await ctx.debug(f"Finding results for query {query}")
 
@@ -379,36 +390,47 @@ class QdrantMCPServer(FastMCP):
             await ctx.debug(f"Set filter: {set_filter}")
 
             # Handle set filtering
-            combined_filter = query_filter
             if set_filter:
                 try:
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
-                    # Create set filter condition
-                    set_filter_condition = {
-                        "key": "set",
-                        "match": {"value": matched_set_slug}
-                    }
+                    # Create set filter condition using proper Qdrant field condition
+                    set_field_condition = models.FieldCondition(
+                        key="metadata.set",
+                        match=models.MatchValue(value=matched_set_slug)
+                    )
                     
                     # Combine with existing filter if present
-                    if combined_filter:
-                        combined_filter = {
-                            "must": [
-                                {"key": "set", "match": {"value": matched_set_slug}},
-                                combined_filter
-                            ]
-                        }
+                    if query_filter:
+                        # If query_filter is already a models.Filter, extract its conditions
+                        if isinstance(query_filter, models.Filter):
+                            existing_must = query_filter.must or []
+                            existing_must_not = query_filter.must_not or []
+                            existing_should = query_filter.should or []
+                        else:
+                            # If it's a dict, convert it to Filter first to extract conditions
+                            temp_filter = models.Filter(**query_filter)
+                            existing_must = temp_filter.must or []
+                            existing_must_not = temp_filter.must_not or []
+                            existing_should = temp_filter.should or []
+                        
+                        # Create combined filter with set condition added to must
+                        combined_must = [set_field_condition] + existing_must
+                        parsed_query_filter = models.Filter(
+                            must=combined_must,
+                            must_not=existing_must_not,
+                            should=existing_should
+                        )
                     else:
-                        combined_filter = set_filter_condition
+                        # Create new filter with just the set condition
+                        parsed_query_filter = models.Filter(must=[set_field_condition])
                         
                 except SemanticMatchError as e:
                     await ctx.debug(f"Set matching error: {e}")
                     return [f"Error: {str(e)}"]
-
-            parsed_query_filter = (
-                models.Filter(**combined_filter) if combined_filter else None
-            )
+            else:
+                parsed_query_filter = query_filter
 
             entries = await self.qdrant_connector.find_hybrid(
                 query,

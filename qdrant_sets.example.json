@@ -1,0 +1,55 @@
+{
+  "version": "1.0",
+  "sets": {
+    "platform_code": {
+      "slug": "platform_code",
+      "description": "Platform Codebase",
+      "aliases": [
+        "platform",
+        "core platform",
+        "main codebase",
+        "backend"
+      ]
+    },
+    "api_docs": {
+      "slug": "api_docs",
+      "description": "API Documentation",
+      "aliases": [
+        "api",
+        "documentation",
+        "api reference",
+        "docs"
+      ]
+    },
+    "frontend_code": {
+      "slug": "frontend_code",
+      "description": "Frontend Application Code",
+      "aliases": [
+        "frontend",
+        "ui",
+        "client",
+        "web app"
+      ]
+    },
+    "database_schema": {
+      "slug": "database_schema",
+      "description": "Database Schema and Migrations",
+      "aliases": [
+        "database",
+        "schema",
+        "migrations",
+        "db"
+      ]
+    },
+    "deployment_config": {
+      "slug": "deployment_config",
+      "description": "Deployment and Infrastructure Configuration",
+      "aliases": [
+        "deployment",
+        "infrastructure",
+        "config",
+        "devops"
+      ]
+    }
+  }
+}

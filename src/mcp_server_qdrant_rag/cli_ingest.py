@@ -600,6 +600,11 @@ class CLISettings(BaseSettings):
     batch_size: int = 10
     verbose: bool = False
 
+    # Metadata settings
+    document_type: Optional[str] = None
+    set_id: Optional[str] = None
+    sets_config_path: Optional[str] = None
+
     def derive_knowledgebase_name(self, path: Path) -> str:
         """
         Derive knowledgebase name from the provided path.
@@ -1159,14 +1164,23 @@ class ContentProcessor:
         max_file_size: Maximum file size to process in bytes (default: 100MB)
     """
     
-    def __init__(self, max_file_size: int = 100 * 1024 * 1024):  # 100MB default
+    def __init__(
+        self, 
+        max_file_size: int = 100 * 1024 * 1024,  # 100MB default
+        document_type: Optional[str] = None,
+        set_id: Optional[str] = None
+    ):
         """
         Initialize content processor.
         
         Args:
             max_file_size: Maximum file size to process in bytes
+            document_type: Document type to assign to all processed files
+            set_id: Set identifier to assign to all processed files
         """
         self.max_file_size = max_file_size
+        self.document_type = document_type
+        self.set_id = set_id
     
     async def process_file(self, file_info: FileInfo) -> Optional[Entry]:
         """
@@ -1207,6 +1221,8 @@ class ContentProcessor:
             entry = Entry(
                 content=content,
                 metadata=metadata,
+                document_type=self.document_type,
+                set_id=self.set_id,
                 is_chunk=False,  # Original files are not chunks
                 source_document_id=None,
                 chunk_index=None,
@@ -2239,7 +2255,10 @@ class IngestOperation(BaseOperation):
             self.progress_reporter._total_items = len(discovered_files)
             
             # Process files with progress reporting
-            content_processor = ContentProcessor()
+            content_processor = ContentProcessor(
+                document_type=self.config.cli_settings.document_type,
+                set_id=self.config.cli_settings.set_id
+            )
             processed_entries = []
             
             for file_info in discovered_files:
@@ -2518,7 +2537,10 @@ class UpdateOperation(BaseOperation):
             self.progress_reporter._total_items = len(discovered_files)
             
             # Process files with progress reporting
-            content_processor = ContentProcessor()
+            content_processor = ContentProcessor(
+                document_type=self.config.cli_settings.document_type,
+                set_id=self.config.cli_settings.set_id
+            )
             processed_entries = []
             
             for file_info in discovered_files:
@@ -3668,6 +3690,7 @@ Shows information about each knowledge base including:
         """Add common arguments to a parser with detailed help text."""
         self._add_qdrant_arguments(parser)
         self._add_embedding_arguments(parser)
+        self._add_metadata_arguments(parser)
         
         parser.add_argument(
             "--knowledgebase",
@@ -3721,6 +3744,30 @@ Shows information about each knowledge base including:
                  "'sentence-transformers/all-mpnet-base-v2' (high quality). "
                  "Can also be set via EMBEDDING_MODEL environment variable. "
                  "(default: nomic-ai/nomic-embed-text-v1.5-Q)",
+        )
+
+    def _add_metadata_arguments(self, parser: argparse.ArgumentParser) -> None:
+        """Add metadata arguments for document categorization."""
+        parser.add_argument(
+            "--document-type",
+            metavar="TYPE",
+            help="Document type to assign to all ingested documents. "
+                 "This metadata field can be used for categorization and filtering. "
+                 "Examples: 'api_docs', 'code', 'requirements', 'design_docs'.",
+        )
+        parser.add_argument(
+            "--set",
+            metavar="SET",
+            help="Set identifier to assign to all ingested documents. "
+                 "This groups documents into logical collections for filtering. "
+                 "Examples: 'platform_code', 'api_docs', 'frontend_code'.",
+        )
+        parser.add_argument(
+            "--sets-config",
+            metavar="PATH",
+            help="Path to sets configuration file (overrides QDRANT_SETS_CONFIG environment variable "
+                 "and default .qdrant_sets.json location). "
+                 "This file defines available sets with descriptions and aliases for semantic matching.",
         )
 
     def _add_path_argument(
@@ -3839,7 +3886,8 @@ class CLIValidator:
             )
 
         # Validate knowledgebase name derivation only if not explicitly provided
-        if path.exists() and not args.knowledgebase:
+        knowledgebase = getattr(args, 'knowledgebase', None)
+        if path.exists() and not knowledgebase:
             try:
                 derived_name = self._derive_knowledgebase_name(path)
                 if not derived_name or not derived_name.strip():
@@ -3855,9 +3903,9 @@ class CLIValidator:
                     f"   💡 Specify a custom name: --knowledgebase my-knowledge-base\n"
                     f"   💡 Use alphanumeric characters, hyphens, and underscores only."
                 )
-        elif args.knowledgebase and not self._is_valid_knowledgebase_name(args.knowledgebase):
+        elif knowledgebase and not self._is_valid_knowledgebase_name(knowledgebase):
             errors.append(
-                f"❌ Invalid knowledgebase name: '{args.knowledgebase}'\n"
+                f"❌ Invalid knowledgebase name: '{knowledgebase}'\n"
                 f"   💡 Names must contain only alphanumeric characters, hyphens (-), and underscores (_).\n"
                 f"   💡 Examples of valid names: my-docs, user_files, project123, documentation\n"
                 f"   💡 Invalid characters will be automatically sanitized if you don't specify --knowledgebase."
@@ -3869,15 +3917,16 @@ class CLIValidator:
         """Validate arguments for remove command with actionable error messages."""
         errors = []
 
-        if not args.knowledgebase:
+        knowledgebase = getattr(args, 'knowledgebase', None)
+        if not knowledgebase:
             errors.append(
                 f"❌ Knowledgebase name is required for 'remove' command.\n"
                 f"   💡 Try: qdrant-ingest remove my-knowledge-base\n"
                 f"   💡 List available knowledge bases: qdrant-ingest list"
             )
-        elif not self._is_valid_knowledgebase_name(args.knowledgebase):
+        elif not self._is_valid_knowledgebase_name(knowledgebase):
             errors.append(
-                f"❌ Invalid knowledgebase name: '{args.knowledgebase}'\n"
+                f"❌ Invalid knowledgebase name: '{knowledgebase}'\n"
                 f"   💡 Names must contain only alphanumeric characters, hyphens (-), and underscores (_).\n"
                 f"   💡 Check the exact name with: qdrant-ingest list\n"
                 f"   💡 Names are case-sensitive and must match exactly."
@@ -4015,6 +4064,9 @@ class CLIConfigBuilder:
             force_operation=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             verbose=getattr(args, "verbose", False),
+            document_type=getattr(args, "document_type", None),
+            set_id=getattr(args, "set", None),
+            sets_config_path=getattr(args, "sets_config", None),
         )
     
     def _build_qdrant_settings(self, args: argparse.Namespace) -> QdrantSettings:
@@ -4056,9 +4108,9 @@ class CLIConfigBuilder:
                 knowledgebase_name = cli_settings.derive_knowledgebase_name(target_path)
                 
         elif args.command == "remove":
-            if not hasattr(args, "knowledgebase") or not args.knowledgebase:
+            knowledgebase_name = getattr(args, "knowledgebase", None)
+            if not knowledgebase_name:
                 raise ValueError("Knowledgebase name is required for 'remove' command")
-            knowledgebase_name = args.knowledgebase
             # No target path needed for remove
             
         elif args.command == "list":

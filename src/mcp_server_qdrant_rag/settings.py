@@ -1,5 +1,7 @@
-from typing import Literal
+from typing import Literal, Dict, List, Optional
 import logging
+import json
+from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings
@@ -28,6 +30,225 @@ DEFAULT_TOOL_HYBRID_FIND_DESCRIPTION = (
 )
 
 METADATA_PATH = "metadata"
+
+
+class SetConfiguration(BaseModel):
+    """Configuration for a single set."""
+    slug: str = Field(description="Unique identifier for the set")
+    description: str = Field(description="Human-readable description")
+    aliases: List[str] = Field(default_factory=list, description="Alternative names")
+
+    @field_validator("slug")
+    @classmethod
+    def validate_slug(cls, v: str) -> str:
+        """Validate that slug is a valid identifier."""
+        # Trim whitespace first
+        v = v.strip() if v else ""
+        
+        if not v:
+            raise ValueError("slug cannot be empty")
+        
+        # Allow alphanumeric, underscore, and hyphen
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError("slug must contain only alphanumeric characters, underscores, and hyphens")
+        
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str) -> str:
+        """Validate that description is not empty."""
+        # Trim whitespace first
+        v = v.strip() if v else ""
+        
+        if not v:
+            raise ValueError("description cannot be empty")
+        return v
+
+
+class SetSettings(BaseSettings):
+    """Settings for set configuration management."""
+    config_file_path: str = Field(
+        default=".qdrant_sets.json",
+        validation_alias="QDRANT_SETS_CONFIG",
+        description="Path to sets configuration file"
+    )
+    sets: Dict[str, SetConfiguration] = Field(default_factory=dict)
+    
+    def get_config_file_path(self, override_path: Optional[str] = None) -> Path:
+        """
+        Get the absolute path to the configuration file.
+        
+        Args:
+            override_path: Command-line override path (highest precedence)
+            
+        Returns:
+            Resolved path to configuration file
+        """
+        if override_path:
+            return Path(override_path).resolve()
+        
+        config_path = Path(self.config_file_path)
+        if config_path.is_absolute():
+            return config_path
+        else:
+            return Path.cwd() / config_path
+    
+    def load_from_file(self, file_path: Optional[Path] = None) -> None:
+        """
+        Load set configurations from a JSON file.
+        
+        Args:
+            file_path: Path to configuration file. If None, uses get_config_file_path()
+        """
+        if file_path is None:
+            file_path = self.get_config_file_path()
+        
+        logger.debug(f"Loading set configuration from: {file_path}")
+        
+        try:
+            if not file_path.exists():
+                logger.info(f"Configuration file not found at {file_path}, creating default configuration")
+                self.create_default_config(file_path)
+                return
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+            
+            # Validate the configuration structure
+            if not isinstance(config_data, dict):
+                raise ValueError("Configuration file must contain a JSON object")
+            
+            sets_data = config_data.get('sets', {})
+            if not isinstance(sets_data, dict):
+                raise ValueError("'sets' field must be a JSON object")
+            
+            # Load and validate each set configuration
+            validated_sets = {}
+            for slug, set_data in sets_data.items():
+                try:
+                    # Validate the set data first, then ensure slug matches the key
+                    if isinstance(set_data, dict):
+                        # Only set slug if it's missing, don't override existing values
+                        if 'slug' not in set_data:
+                            set_data['slug'] = slug
+                    
+                    set_config = SetConfiguration.model_validate(set_data)
+                    validated_sets[slug] = set_config
+                    logger.debug(f"Loaded set configuration: {slug}")
+                except Exception as e:
+                    logger.warning(f"Skipping invalid set configuration '{slug}': {e}")
+                    continue
+            
+            self.sets = validated_sets
+            logger.info(f"Successfully loaded {len(self.sets)} set configurations")
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in configuration file {file_path}: {e}")
+            logger.info("Creating default configuration due to JSON error")
+            self.create_default_config(file_path)
+        except Exception as e:
+            logger.error(f"Error loading configuration from {file_path}: {e}")
+            logger.info("Using empty configuration due to load error")
+            self.sets = {}
+    
+    def create_default_config(self, file_path: Path) -> None:
+        """
+        Create a default configuration file with common examples.
+        
+        Args:
+            file_path: Path where to create the default configuration
+        """
+        default_sets = {
+            "platform_code": SetConfiguration(
+                slug="platform_code",
+                description="Platform Codebase",
+                aliases=["platform", "core platform", "main codebase", "backend"]
+            ),
+            "api_docs": SetConfiguration(
+                slug="api_docs",
+                description="API Documentation",
+                aliases=["api", "documentation", "api reference", "docs"]
+            ),
+            "frontend_code": SetConfiguration(
+                slug="frontend_code",
+                description="Frontend Application Code",
+                aliases=["frontend", "ui", "client", "web app"]
+            ),
+            "database_schema": SetConfiguration(
+                slug="database_schema",
+                description="Database Schema and Migrations",
+                aliases=["database", "schema", "migrations", "db"]
+            ),
+            "deployment_config": SetConfiguration(
+                slug="deployment_config",
+                description="Deployment and Infrastructure Configuration",
+                aliases=["deployment", "infrastructure", "config", "devops"]
+            )
+        }
+        
+        config_data = {
+            "version": "1.0",
+            "sets": {
+                slug: {
+                    "slug": set_config.slug,
+                    "description": set_config.description,
+                    "aliases": set_config.aliases
+                }
+                for slug, set_config in default_sets.items()
+            }
+        }
+        
+        try:
+            # Ensure parent directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            self.sets = default_sets
+            logger.info(f"Created default set configuration at {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create default configuration at {file_path}: {e}")
+            # Use the default sets in memory even if we can't write to file
+            self.sets = default_sets
+    
+    def save_to_file(self, file_path: Optional[Path] = None) -> None:
+        """
+        Save current set configurations to a JSON file.
+        
+        Args:
+            file_path: Path to save configuration file. If None, uses get_config_file_path()
+        """
+        if file_path is None:
+            file_path = self.get_config_file_path()
+        
+        config_data = {
+            "version": "1.0",
+            "sets": {
+                slug: {
+                    "slug": set_config.slug,
+                    "description": set_config.description,
+                    "aliases": set_config.aliases
+                }
+                for slug, set_config in self.sets.items()
+            }
+        }
+        
+        try:
+            # Ensure parent directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Saved set configuration to {file_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save configuration to {file_path}: {e}")
+            raise
 
 
 class ToolSettings(BaseSettings):

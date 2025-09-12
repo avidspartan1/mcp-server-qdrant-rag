@@ -390,33 +390,82 @@ class SetSettings(BaseSettings):
             "platform_code": SetConfiguration(
                 slug="platform_code",
                 description="Platform Codebase",
-                aliases=["platform", "core platform", "main codebase", "backend"]
+                aliases=["platform", "core platform", "main codebase", "backend", "server code"]
             ),
             "api_docs": SetConfiguration(
                 slug="api_docs",
                 description="API Documentation",
-                aliases=["api", "documentation", "api reference", "docs"]
+                aliases=["api", "documentation", "api reference", "docs", "api guide", "endpoints"]
             ),
             "frontend_code": SetConfiguration(
                 slug="frontend_code",
                 description="Frontend Application Code",
-                aliases=["frontend", "ui", "client", "web app"]
+                aliases=["frontend", "ui", "client", "web app", "user interface", "react", "vue", "angular"]
             ),
             "database_schema": SetConfiguration(
                 slug="database_schema",
                 description="Database Schema and Migrations",
-                aliases=["database", "schema", "migrations", "db"]
+                aliases=["database", "schema", "migrations", "db", "sql", "tables", "models"]
             ),
             "deployment_config": SetConfiguration(
                 slug="deployment_config",
                 description="Deployment and Infrastructure Configuration",
-                aliases=["deployment", "infrastructure", "config", "devops"]
+                aliases=["deployment", "infrastructure", "config", "devops", "docker", "kubernetes", "ci/cd"]
+            ),
+            "test_code": SetConfiguration(
+                slug="test_code",
+                description="Test Code and Test Documentation",
+                aliases=["tests", "testing", "unit tests", "integration tests", "test cases", "specs"]
+            ),
+            "project_docs": SetConfiguration(
+                slug="project_docs",
+                description="Project Documentation and README Files",
+                aliases=["readme", "documentation", "project info", "getting started", "guides", "tutorials"]
+            ),
+            "configuration": SetConfiguration(
+                slug="configuration",
+                description="Application Configuration Files",
+                aliases=["config", "settings", "environment", "env", "properties", "yaml", "json config"]
             )
         }
         
         config_data = {
             "version": "1.0",
             "description": "Set configurations for semantic filtering in Qdrant RAG server",
+            "_documentation": {
+                "overview": "This file defines sets for organizing and filtering documents in your knowledge base. Each set represents a logical grouping of documents that can be filtered during search operations.",
+                "usage": {
+                    "ingestion": "Use --set parameter in CLI or set_id in MCP tools to assign documents to sets",
+                    "search": "Use set_filter parameter in search tools with natural language descriptions",
+                    "examples": [
+                        "Search with: set_filter='platform code' matches 'platform_code' set",
+                        "Search with: set_filter='api documentation' matches 'api_docs' set",
+                        "Search with: set_filter='frontend' matches 'frontend_code' set"
+                    ]
+                },
+                "configuration": {
+                    "slug": "Unique identifier for the set (alphanumeric, underscores, hyphens only)",
+                    "description": "Human-readable description used for semantic matching",
+                    "aliases": "Alternative names that can be used to reference this set"
+                },
+                "validation_rules": {
+                    "slug": "Must be non-empty, contain only [a-zA-Z0-9_-], max 50 characters",
+                    "description": "Must be non-empty after trimming whitespace",
+                    "aliases": "Optional list of strings for alternative references"
+                },
+                "examples": {
+                    "minimal_set": {
+                        "slug": "my_docs",
+                        "description": "My Personal Documents",
+                        "aliases": []
+                    },
+                    "full_set": {
+                        "slug": "project_specs",
+                        "description": "Project Specifications and Requirements",
+                        "aliases": ["specs", "requirements", "project docs", "specifications"]
+                    }
+                }
+            },
             "sets": {
                 slug: {
                     "slug": set_config.slug,

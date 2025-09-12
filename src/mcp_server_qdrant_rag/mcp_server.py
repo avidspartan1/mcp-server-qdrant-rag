@@ -12,9 +12,11 @@ from mcp_server_qdrant_rag.common.wrap_filters import wrap_filters
 from mcp_server_qdrant_rag.embeddings.base import EmbeddingProvider
 from mcp_server_qdrant_rag.embeddings.factory import create_embedding_provider
 from mcp_server_qdrant_rag.qdrant import ArbitraryFilter, Entry, Metadata, QdrantConnector
+from mcp_server_qdrant_rag.semantic_matcher import SemanticSetMatcher, SemanticMatchError
 from mcp_server_qdrant_rag.settings import (
     EmbeddingProviderSettings,
     QdrantSettings,
+    SetSettings,
     ToolSettings,
 )
 
@@ -34,6 +36,7 @@ class QdrantMCPServer(FastMCP):
         qdrant_settings: QdrantSettings,
         embedding_provider_settings: Optional[EmbeddingProviderSettings] = None,
         embedding_provider: Optional[EmbeddingProvider] = None,
+        sets_config_path: Optional[str] = None,
         name: str = "mcp-server-qdrant-rag",
         instructions: str | None = None,
         **settings: Any,
@@ -64,6 +67,15 @@ class QdrantMCPServer(FastMCP):
             self.embedding_provider = embedding_provider
 
         assert self.embedding_provider is not None, "Embedding provider is required"
+
+        # Initialize set configuration and semantic matcher
+        self.set_settings = SetSettings()
+        if sets_config_path:
+            self.set_settings.load_from_file(self.set_settings.get_config_file_path(sets_config_path))
+        else:
+            self.set_settings.load_from_file()
+        
+        self.semantic_matcher = SemanticSetMatcher(self.set_settings.sets)
 
         self.qdrant_connector = QdrantConnector(
             qdrant_settings.location,
@@ -133,6 +145,14 @@ class QdrantMCPServer(FastMCP):
             logger.info("Filterable Fields: None configured")
         
         logger.info(f"Allow Arbitrary Filter: {self.qdrant_settings.allow_arbitrary_filter}")
+        
+        # Log set configuration
+        if self.set_settings.sets:
+            logger.info(f"Set Configurations: {len(self.set_settings.sets)} sets loaded")
+            for slug, config in self.set_settings.sets.items():
+                logger.info(f"  - {slug}: {config.description}")
+        else:
+            logger.info("Set Configurations: None loaded")
         
         logger.info("=== Configuration Complete ===")
 
@@ -215,6 +235,10 @@ class QdrantMCPServer(FastMCP):
                 str, Field(description="The collection to search in")
             ],
             query_filter: ArbitraryFilter | None = None,
+            set_filter: Annotated[
+                Optional[str], 
+                Field(description="Natural language description of the set to filter by")
+            ] = None,
         ) -> list[str] | None:
             """
             Find memories in Qdrant.
@@ -223,13 +247,43 @@ class QdrantMCPServer(FastMCP):
             :param collection_name: The name of the collection to search in, optional. If not provided,
                                     the default collection is used.
             :param query_filter: The filter to apply to the query.
+            :param set_filter: Natural language description of the set to filter by.
             :return: A list of entries found or None.
             """
 
             # Log query_filter
             await ctx.debug(f"Query filter: {query_filter}")
+            await ctx.debug(f"Set filter: {set_filter}")
 
-            query_filter = models.Filter(**query_filter) if query_filter else None
+            # Handle set filtering
+            combined_filter = query_filter
+            if set_filter:
+                try:
+                    matched_set_slug = await self.semantic_matcher.match_set(set_filter)
+                    await ctx.debug(f"Matched set: {matched_set_slug}")
+                    
+                    # Create set filter condition
+                    set_filter_condition = {
+                        "key": "set",
+                        "match": {"value": matched_set_slug}
+                    }
+                    
+                    # Combine with existing filter if present
+                    if combined_filter:
+                        combined_filter = {
+                            "must": [
+                                {"key": "set", "match": {"value": matched_set_slug}},
+                                combined_filter
+                            ]
+                        }
+                    else:
+                        combined_filter = set_filter_condition
+                        
+                except SemanticMatchError as e:
+                    await ctx.debug(f"Set matching error: {e}")
+                    return [f"Error: {str(e)}"]
+
+            query_filter = models.Filter(**combined_filter) if combined_filter else None
 
             await ctx.debug(f"Finding results for query {query}")
 
@@ -267,6 +321,10 @@ class QdrantMCPServer(FastMCP):
                 int, Field(description="Final number of results after fusion")
             ] = 10,
             query_filter: ArbitraryFilter | None = None,
+            set_filter: Annotated[
+                Optional[str], 
+                Field(description="Natural language description of the set to filter by")
+            ] = None,
         ) -> list[str] | None:
             """
             Hybrid search combining semantic similarity and keyword matching.
@@ -280,14 +338,44 @@ class QdrantMCPServer(FastMCP):
             :param sparse_limit: Maximum results from sparse vector search.
             :param final_limit: Maximum final results after fusion.
             :param query_filter: The filter to apply to the query.
+            :param set_filter: Natural language description of the set to filter by.
             :return: A list of entries found or None.
             """
             await ctx.debug(
                 f"Hybrid search for query '{query}' using fusion method '{fusion_method}'"
             )
+            await ctx.debug(f"Set filter: {set_filter}")
+
+            # Handle set filtering
+            combined_filter = query_filter
+            if set_filter:
+                try:
+                    matched_set_slug = await self.semantic_matcher.match_set(set_filter)
+                    await ctx.debug(f"Matched set: {matched_set_slug}")
+                    
+                    # Create set filter condition
+                    set_filter_condition = {
+                        "key": "set",
+                        "match": {"value": matched_set_slug}
+                    }
+                    
+                    # Combine with existing filter if present
+                    if combined_filter:
+                        combined_filter = {
+                            "must": [
+                                {"key": "set", "match": {"value": matched_set_slug}},
+                                combined_filter
+                            ]
+                        }
+                    else:
+                        combined_filter = set_filter_condition
+                        
+                except SemanticMatchError as e:
+                    await ctx.debug(f"Set matching error: {e}")
+                    return [f"Error: {str(e)}"]
 
             parsed_query_filter = (
-                models.Filter(**query_filter) if query_filter else None
+                models.Filter(**combined_filter) if combined_filter else None
             )
 
             entries = await self.qdrant_connector.find_hybrid(

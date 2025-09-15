@@ -569,7 +569,7 @@ class CLISettings(BaseSettings):
             ".yaml",
             ".yml",
             ".rst",
-            ".hcl"
+            ".hcl",
             ".tf",
             ".tftpl",
             ".tpl",
@@ -1401,6 +1401,7 @@ class ContentProcessor:
             '.tf': 'terraform',
             '.tftpl': 'terraform_template',
             '.tpl': 'template',
+            '.hcl': 'hashicorp_configuration_language',
             '.dockerfile': 'dockerfile',
             
             # Web

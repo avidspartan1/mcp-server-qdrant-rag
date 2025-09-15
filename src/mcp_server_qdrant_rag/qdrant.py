@@ -600,6 +600,7 @@ class QdrantConnector:
                         limit=sparse_limit,
                     )
                 )
+                logger.info(f"Sparse vectors available in collection {collection_name}, using hybrid search")
             except Exception:
                 # If sparse vectors aren't available, fallback to dense-only search
                 logger.warning(
@@ -714,6 +715,11 @@ class QdrantConnector:
                         distance=models.Distance.COSINE,
                     )
                 },
+                sparse_vectors_config={
+                    "sparse": models.SparseVectorParams(
+                        index=models.SparseIndexParams()
+                    )
+                }
             )
 
             # Create payload indexes if configured

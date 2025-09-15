@@ -173,15 +173,19 @@ class TestCLIEmbeddingIntegration:
                 nonlocal call_count
                 call_count += 1
                 
-                if call_count == 1:
+                # Check which model is being requested
+                if settings.model_name == 'nomic-ai/nomic-embed-text-v1.5-Q':
                     # First call (default model) fails
                     raise Exception("Default model not available")
-                else:
+                elif settings.model_name == 'sentence-transformers/all-MiniLM-L6-v2':
                     # Second call (fallback model) succeeds
                     mock_provider = MagicMock()
                     mock_provider.get_vector_size.return_value = 384
                     mock_provider.get_vector_name.return_value = "fast-all-minilm-l6-v2"
                     return mock_provider
+                else:
+                    # Other models also fail
+                    raise Exception(f"Model {settings.model_name} not available")
             
             with patch('src.mcp_server_qdrant_rag.cli_ingest.create_embedding_provider', side_effect=mock_create_provider):
                 # Mock QdrantConnector with no existing collections

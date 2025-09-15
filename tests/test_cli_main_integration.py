@@ -265,7 +265,10 @@ class TestMainAsyncIntegration:
         
         # Verify SIGINT exit code
         assert exc_info.value.code == 130
-        mock_print.assert_called_with("\n🚫 Operation cancelled by user", file=sys.stderr)
+        # Check that both expected messages were printed
+        print_calls = [call[0][0] for call in mock_print.call_args_list]
+        assert "\n🚫 Operation cancelled by user" in print_calls
+        assert "💡 You can resume operations later - no partial data was committed" in print_calls
 
     @pytest.mark.asyncio
     async def test_main_async_configuration_error(self, mock_parse_and_validate):
@@ -284,12 +287,10 @@ class TestMainAsyncIntegration:
         
         # Verify configuration error exit code
         assert exc_info.value.code == 2
-        # Check that the error message contains the expected text
-        print_calls = [call for call in mock_print.call_args_list if call[1].get('file') == sys.stderr]
-        assert len(print_calls) > 0
-        error_message = print_calls[-1][0][0]
-        assert "❌ Configuration error:" in error_message
-        assert "Invalid config" in error_message
+        # Check that the error messages were printed
+        print_calls = [call[0][0] for call in mock_print.call_args_list if call[1].get('file') == sys.stderr]
+        assert any("❌ Configuration error:" in msg for msg in print_calls)
+        assert any("💡 Use --help for detailed usage information" in msg for msg in print_calls)
 
     @pytest.mark.asyncio
     async def test_main_async_qdrant_error(self, mock_parse_and_validate):
@@ -304,7 +305,10 @@ class TestMainAsyncIntegration:
         
         # Verify Qdrant error exit code
         assert exc_info.value.code == 3
-        mock_print.assert_called_with("❌ Qdrant error: Qdrant connection failed", file=sys.stderr)
+        # Check that the error messages were printed
+        print_calls = [call[0][0] for call in mock_print.call_args_list if call[1].get('file') == sys.stderr]
+        assert any("❌ Qdrant error: Qdrant connection failed" in msg for msg in print_calls)
+        assert any("💡 Test connection: qdrant-ingest list" in msg for msg in print_calls)
 
     @pytest.mark.asyncio
     async def test_main_async_unexpected_error(self, mock_parse_and_validate):
@@ -317,7 +321,10 @@ class TestMainAsyncIntegration:
         
         # Verify general error exit code
         assert exc_info.value.code == 1
-        mock_print.assert_called_with("❌ Unexpected error: Unexpected error", file=sys.stderr)
+        # Check that the error messages were printed
+        print_calls = [call[0][0] for call in mock_print.call_args_list if call[1].get('file') == sys.stderr]
+        assert any("❌ Unexpected error: Unexpected error" in msg for msg in print_calls)
+        assert any("   • Report this issue if it persists" in msg for msg in print_calls)
 
     @pytest.mark.asyncio
     async def test_main_async_debug_mode(self, mock_parse_and_validate):

@@ -76,21 +76,21 @@ A specialized Model Context Protocol server that provides intelligent document c
 
 ### Tools
 
-1. `qdrant-store`
+1. `qdrant_store`
    - Store some information in the Qdrant database
    - Input:
      - `information` (string): Information to store
      - `metadata` (JSON): Optional metadata to store
      - `collection_name` (string): Name of the collection to store the information in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
    - Returns: Confirmation message
-2. `qdrant-find`
+2. `qdrant_find`
    - Retrieve relevant information from the Qdrant database using semantic search
    - Input:
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
      - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
    - Returns: Information stored in the Qdrant database as separate messages
-3. `qdrant-hybrid-find`
+3. `qdrant_hybrid_find`
    - Advanced hybrid search combining semantic similarity and keyword matching using Qdrant's RRF/DBSF fusion
    - Input:
      - `query` (string): Query to use for searching
@@ -980,8 +980,8 @@ Tool descriptions, specified in `TOOL_STORE_DESCRIPTION` and `TOOL_FIND_DESCRIPT
 the MCP server. The ones provided above are examples and may need to be customized for your specific use case. However,
 Claude Code should be already able to:
 
-1. Use the `qdrant-store` tool to store code snippets with descriptions.
-2. Use the `qdrant-find` tool to search for relevant code snippets using natural language.
+1. Use the `qdrant_store` tool to store code snippets with descriptions.
+2. Use the `qdrant_find` tool to search for relevant code snippets using natural language.
 
 ### Run MCP server in Development Mode
 

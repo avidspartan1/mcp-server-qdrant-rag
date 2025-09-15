@@ -560,13 +560,13 @@ class QdrantMCPServer(FastMCP):
 
         self.tool(
             find_foo,
-            name="qdrant-find",
+            name="qdrant_find",
             description=self.tool_settings.tool_find_description,
         )
 
         self.tool(
             hybrid_find_foo,
-            name="qdrant-hybrid-find",
+            name="qdrant_hybrid_find",
             description=self.tool_settings.tool_hybrid_find_description,
         )
 
@@ -574,7 +574,7 @@ class QdrantMCPServer(FastMCP):
             # Those methods can modify the database
             self.tool(
                 store_foo,
-                name="qdrant-store",
+                name="qdrant_store",
                 description=self.tool_settings.tool_store_description,
             )
 
@@ -680,7 +680,7 @@ class QdrantMCPServer(FastMCP):
 
         self.tool(
             analyze_compatibility_foo,
-            name="qdrant-analyze-compatibility",
+            name="qdrant_analyze_compatibility",
             description="Analyze collection compatibility for backward compatibility assessment. Helps identify issues when switching models or configurations.",
         )
 
@@ -719,7 +719,7 @@ class QdrantMCPServer(FastMCP):
 
         self.tool(
             reload_sets_config,
-            name="qdrant-reload-sets-config",
+            name="qdrant_reload_sets_config",
             description="Reload set configurations without restarting the server. Allows updating set definitions for search filtering.",
         )
     async def _validate_and_process_metadata(self, ctx: Context, metadata: Metadata | None) -> Metadata | None:

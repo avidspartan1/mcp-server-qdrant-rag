@@ -88,7 +88,7 @@ A specialized Model Context Protocol server that provides intelligent document c
    - Input:
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
-     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
+     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching. **Note**: Requires `QDRANT_ENABLE_SEMANTIC_SET_MATCHING=true` to be set.
    - Returns: Information stored in the Qdrant database as separate messages. When `set_filter` is used, the response includes the matched set name for transparency.
 3. `qdrant_hybrid_find`
    - Advanced hybrid search combining semantic similarity and keyword matching using Qdrant's RRF/DBSF fusion
@@ -100,7 +100,7 @@ A specialized Model Context Protocol server that provides intelligent document c
      - `dense_limit` (integer, optional): Maximum results from semantic search. Default: 20
      - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20
      - `final_limit` (integer, optional): Final number of results after fusion. Default: 10
-     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
+     - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching. **Note**: Requires `QDRANT_ENABLE_SEMANTIC_SET_MATCHING=true` to be set.
    - Returns: Fused search results combining both semantic understanding and exact keyword matching. When `set_filter` is used, the response includes the matched set name for transparency.
 
 ## Environment Variables
@@ -123,9 +123,10 @@ The configuration of the server is done using environment variables:
 
 The server supports document categorization and set-based filtering for organizing and searching your knowledge base:
 
-| Name                 | Description                                            | Default Value       |
-| -------------------- | ------------------------------------------------------ | ------------------- |
-| `QDRANT_SETS_CONFIG` | Path to sets configuration file for semantic filtering | `.qdrant_sets.json` |
+| Name                              | Description                                                                    | Default Value       |
+| --------------------------------- | ------------------------------------------------------------------------------ | ------------------- |
+| `QDRANT_SETS_CONFIG`              | Path to sets configuration file for semantic filtering                         | `.qdrant_sets.json` |
+| `QDRANT_ENABLE_SEMANTIC_SET_MATCHING` | Enable semantic matching for set filters (allows natural language set queries). When disabled, `set_filter` parameter is not exposed in tool schema. | `false`             |
 
 ### Sets Configuration File Format
 

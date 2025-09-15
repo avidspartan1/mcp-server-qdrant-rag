@@ -1056,6 +1056,10 @@ class QdrantSettings(BaseSettings):
     allow_arbitrary_filter: bool = Field(
         default=False, validation_alias="QDRANT_ALLOW_ARBITRARY_FILTER"
     )
+    
+    enable_semantic_set_matching: bool = Field(
+        default=False, validation_alias="QDRANT_ENABLE_SEMANTIC_SET_MATCHING"
+    )
 
     def filterable_fields_dict(self) -> dict[str, FilterableField]:
         if self.filterable_fields is None:

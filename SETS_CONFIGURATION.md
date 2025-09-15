@@ -6,6 +6,13 @@ This guide explains how to configure document sets for semantic metadata filteri
 
 Sets allow you to organize documents into logical groups that can be filtered during search operations. The system uses semantic matching to map natural language queries to configured sets, making it easy to search within specific document collections.
 
+**Note**: Semantic set matching is **disabled by default**. To enable it, set the environment variable:
+```bash
+export QDRANT_ENABLE_SEMANTIC_SET_MATCHING=true
+```
+
+When disabled, the `set_filter` parameter is not exposed in the tool schema, making the tools cleaner and preventing confusion. The LLM will not see or be able to use set filtering functionality unless explicitly enabled.
+
 ## Configuration File Format
 
 ### File Location

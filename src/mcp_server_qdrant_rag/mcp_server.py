@@ -221,6 +221,247 @@ class QdrantMCPServer(FastMCP):
         else:
             return f"<entry><content>{entry.content}</content><metadata>{entry_metadata}</metadata></entry>"
 
+    async def _find_implementation(
+        self,
+        ctx: Context,
+        query: str,
+        collection_name: str,
+        query_filter: ArbitraryFilter | None = None,
+        set_filter: str | None = None,
+    ) -> list[str] | None:
+        """
+        Internal implementation of find functionality.
+        """
+        # Log query_filter
+        await ctx.debug(f"Query filter: {query_filter}")
+        await ctx.debug(f"Set filter: {set_filter}")
+
+        # Handle set filtering with comprehensive validation and error handling
+        if set_filter:
+            try:
+                # Validate set_filter input
+                if not isinstance(set_filter, str):
+                    await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
+                    return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
+                
+                set_filter = set_filter.strip()
+                if not set_filter:
+                    await ctx.debug("Empty set_filter provided")
+                    return ["Error: set_filter cannot be empty"]
+                
+                if len(set_filter) > 200:
+                    await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
+                    return ["Error: set_filter cannot exceed 200 characters"]
+                
+                # Attempt semantic matching
+                matched_set_slug = await self.semantic_matcher.match_set(set_filter)
+                await ctx.debug(f"Matched set: {matched_set_slug}")
+                
+                # Store the matched set for inclusion in response
+                matched_set_info = matched_set_slug
+                
+                # Create set filter condition using proper Qdrant field condition
+                set_field_condition = models.FieldCondition(
+                    key="metadata.set",
+                    match=models.MatchValue(value=matched_set_slug)
+                )
+                
+                # Combine with existing filter if present
+                if query_filter:
+                    # If query_filter is already a models.Filter, extract its conditions
+                    if isinstance(query_filter, models.Filter):
+                        existing_must = query_filter.must or []
+                        existing_must_not = query_filter.must_not or []
+                        existing_should = query_filter.should or []
+                    else:
+                        # If it's a dict, convert it to Filter first to extract conditions
+                        temp_filter = models.Filter(**query_filter)
+                        existing_must = temp_filter.must or []
+                        existing_must_not = temp_filter.must_not or []
+                        existing_should = temp_filter.should or []
+                    
+                    # Create combined filter with set condition added to must
+                    combined_must = [set_field_condition] + existing_must
+                    query_filter = models.Filter(
+                        must=combined_must,
+                        must_not=existing_must_not,
+                        should=existing_should
+                    )
+                else:
+                    # Create new filter with just the set condition
+                    query_filter = models.Filter(must=[set_field_condition])
+                    
+            except SemanticMatchError as e:
+                await ctx.debug(f"Set matching error: {e}")
+                # Provide more helpful error messages based on error type
+                from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
+                
+                if isinstance(e, NoMatchFoundError):
+                    available_sets = self.semantic_matcher.get_available_sets()
+                    if available_sets:
+                        error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
+                        if len(available_sets) > 5:
+                            error_msg += f" (and {len(available_sets) - 5} more)"
+                    else:
+                        error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
+                    return [f"Error: {error_msg}"]
+                elif isinstance(e, AmbiguousMatchError):
+                    return [f"Error: {str(e)}. Please be more specific."]
+                else:
+                    return [f"Error: Set filtering failed: {str(e)}"]
+            except Exception as e:
+                await ctx.debug(f"Unexpected error in set filtering: {e}")
+                return [f"Error: Unexpected error in set filtering: {str(e)}"]
+
+        await ctx.debug(f"Finding results for query {query}")
+
+        entries = await self.qdrant_connector.search(
+            query,
+            collection_name=collection_name,
+            limit=self.qdrant_settings.search_limit,
+            query_filter=query_filter,
+        )
+        if not entries:
+            return None
+        
+        # Build response with set information if applicable
+        if set_filter and 'matched_set_info' in locals():
+            content = [
+                f"Results for the query '{query}' (filtered by set: {matched_set_info})",
+            ]
+        else:
+            content = [
+                f"Results for the query '{query}'",
+            ]
+        for entry in entries:
+            content.append(self.format_entry(entry))
+        return content
+
+    async def _hybrid_find_implementation(
+        self,
+        ctx: Context,
+        query: str,
+        collection_name: str,
+        fusion_method: str = "rrf",
+        dense_limit: int = 20,
+        sparse_limit: int = 20,
+        final_limit: int = 10,
+        query_filter: ArbitraryFilter | None = None,
+        set_filter: str | None = None,
+    ) -> list[str] | None:
+        """
+        Internal implementation of hybrid_find functionality.
+        """
+        await ctx.debug(
+            f"Hybrid search for query '{query}' using fusion method '{fusion_method}'"
+        )
+        await ctx.debug(f"Set filter: {set_filter}")
+
+        # Handle set filtering with comprehensive validation and error handling
+        if set_filter:
+            try:
+                # Validate set_filter input
+                if not isinstance(set_filter, str):
+                    await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
+                    return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
+                
+                set_filter = set_filter.strip()
+                if not set_filter:
+                    await ctx.debug("Empty set_filter provided")
+                    return ["Error: set_filter cannot be empty"]
+                
+                if len(set_filter) > 200:
+                    await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
+                    return ["Error: set_filter cannot exceed 200 characters"]
+                
+                # Attempt semantic matching
+                matched_set_slug = await self.semantic_matcher.match_set(set_filter)
+                await ctx.debug(f"Matched set: {matched_set_slug}")
+                
+                # Store the matched set for inclusion in response
+                matched_set_info_hybrid = matched_set_slug
+                
+                # Create set filter condition using proper Qdrant field condition
+                set_field_condition = models.FieldCondition(
+                    key="metadata.set",
+                    match=models.MatchValue(value=matched_set_slug)
+                )
+                
+                # Combine with existing filter if present
+                if query_filter:
+                    # If query_filter is already a models.Filter, extract its conditions
+                    if isinstance(query_filter, models.Filter):
+                        existing_must = query_filter.must or []
+                        existing_must_not = query_filter.must_not or []
+                        existing_should = query_filter.should or []
+                    else:
+                        # If it's a dict, convert it to Filter first to extract conditions
+                        temp_filter = models.Filter(**query_filter)
+                        existing_must = temp_filter.must or []
+                        existing_must_not = temp_filter.must_not or []
+                        existing_should = temp_filter.should or []
+                    
+                    # Create combined filter with set condition added to must
+                    combined_must = [set_field_condition] + existing_must
+                    parsed_query_filter = models.Filter(
+                        must=combined_must,
+                        must_not=existing_must_not,
+                        should=existing_should
+                    )
+                else:
+                    # Create new filter with just the set condition
+                    parsed_query_filter = models.Filter(must=[set_field_condition])
+                    
+            except SemanticMatchError as e:
+                await ctx.debug(f"Set matching error: {e}")
+                # Provide more helpful error messages based on error type
+                from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
+                
+                if isinstance(e, NoMatchFoundError):
+                    available_sets = self.semantic_matcher.get_available_sets()
+                    if available_sets:
+                        error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
+                        if len(available_sets) > 5:
+                            error_msg += f" (and {len(available_sets) - 5} more)"
+                    else:
+                        error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
+                    return [f"Error: {error_msg}"]
+                elif isinstance(e, AmbiguousMatchError):
+                    return [f"Error: {str(e)}. Please be more specific."]
+                else:
+                    return [f"Error: Set filtering failed: {str(e)}"]
+            except Exception as e:
+                await ctx.debug(f"Unexpected error in set filtering: {e}")
+                return [f"Error: Unexpected error in set filtering: {str(e)}"]
+        else:
+            parsed_query_filter = query_filter
+
+        entries = await self.qdrant_connector.find_hybrid(
+            query,
+            collection_name=collection_name,
+            fusion_method=fusion_method,
+            dense_limit=dense_limit,
+            sparse_limit=sparse_limit,
+            final_limit=final_limit,
+            query_filter=parsed_query_filter,
+        )
+
+        if not entries:
+            return None
+
+        # Build response with set information if applicable
+        if set_filter and 'matched_set_info_hybrid' in locals():
+            content = [
+                f"Hybrid search results for '{query}' (fusion: {fusion_method}, filtered by set: {matched_set_info_hybrid})",
+            ]
+        else:
+            content = [
+                f"Hybrid search results for '{query}' (fusion: {fusion_method})",
+            ]
+        for entry in entries:
+            content.append(self.format_entry(entry))
+        return content
+
     def setup_tools(self):
         """
         Register the tools in the server.
@@ -271,283 +512,84 @@ class QdrantMCPServer(FastMCP):
                 await ctx.debug(f"Storage error: {e}")
                 return f"Error storing information: {str(e)}"
 
-        async def find(
-            ctx: Context,
-            query: Annotated[str, Field(description="What to search for")],
-            collection_name: Annotated[
-                str, Field(description="The collection to search in")
-            ],
-            query_filter: ArbitraryFilter | None = None,
-            set_filter: Annotated[
-                Optional[str], 
-                Field(description="Natural language description of the set to filter by")
-            ] = None,
-        ) -> list[str] | None:
-            """
-            Find memories in Qdrant.
-            :param ctx: The context for the request.
-            :param query: The query to use for the search.
-            :param collection_name: The name of the collection to search in, optional. If not provided,
-                                    the default collection is used.
-            :param query_filter: The filter to apply to the query.
-            :param set_filter: Natural language description of the set to filter by.
-            :return: A list of entries found or None.
-            """
-
-            # Log query_filter
-            await ctx.debug(f"Query filter: {query_filter}")
-            await ctx.debug(f"Set filter: {set_filter}")
-
-            # Handle set filtering with comprehensive validation and error handling
-            if set_filter:
-                try:
-                    # Validate set_filter input
-                    if not isinstance(set_filter, str):
-                        await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
-                        return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
-                    
-                    set_filter = set_filter.strip()
-                    if not set_filter:
-                        await ctx.debug("Empty set_filter provided")
-                        return ["Error: set_filter cannot be empty"]
-                    
-                    if len(set_filter) > 200:
-                        await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
-                        return ["Error: set_filter cannot exceed 200 characters"]
-                    
-                    # Attempt semantic matching
-                    matched_set_slug = await self.semantic_matcher.match_set(set_filter)
-                    await ctx.debug(f"Matched set: {matched_set_slug}")
-                    
-                    # Store the matched set for inclusion in response
-                    matched_set_info = matched_set_slug
-                    
-                    # Create set filter condition using proper Qdrant field condition
-                    set_field_condition = models.FieldCondition(
-                        key="metadata.set",
-                        match=models.MatchValue(value=matched_set_slug)
-                    )
-                    
-                    # Combine with existing filter if present
-                    if query_filter:
-                        # If query_filter is already a models.Filter, extract its conditions
-                        if isinstance(query_filter, models.Filter):
-                            existing_must = query_filter.must or []
-                            existing_must_not = query_filter.must_not or []
-                            existing_should = query_filter.should or []
-                        else:
-                            # If it's a dict, convert it to Filter first to extract conditions
-                            temp_filter = models.Filter(**query_filter)
-                            existing_must = temp_filter.must or []
-                            existing_must_not = temp_filter.must_not or []
-                            existing_should = temp_filter.should or []
-                        
-                        # Create combined filter with set condition added to must
-                        combined_must = [set_field_condition] + existing_must
-                        query_filter = models.Filter(
-                            must=combined_must,
-                            must_not=existing_must_not,
-                            should=existing_should
-                        )
-                    else:
-                        # Create new filter with just the set condition
-                        query_filter = models.Filter(must=[set_field_condition])
-                        
-                except SemanticMatchError as e:
-                    await ctx.debug(f"Set matching error: {e}")
-                    # Provide more helpful error messages based on error type
-                    from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
-                    
-                    if isinstance(e, NoMatchFoundError):
-                        available_sets = self.semantic_matcher.get_available_sets()
-                        if available_sets:
-                            error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
-                            if len(available_sets) > 5:
-                                error_msg += f" (and {len(available_sets) - 5} more)"
-                        else:
-                            error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
-                        return [f"Error: {error_msg}"]
-                    elif isinstance(e, AmbiguousMatchError):
-                        return [f"Error: {str(e)}. Please be more specific."]
-                    else:
-                        return [f"Error: Set filtering failed: {str(e)}"]
-                except Exception as e:
-                    await ctx.debug(f"Unexpected error in set filtering: {e}")
-                    return [f"Error: Unexpected error in set filtering: {str(e)}"]
-
-            await ctx.debug(f"Finding results for query {query}")
-
-            entries = await self.qdrant_connector.search(
-                query,
-                collection_name=collection_name,
-                limit=self.qdrant_settings.search_limit,
-                query_filter=query_filter,
-            )
-            if not entries:
-                return None
-            
-            # Build response with set information if applicable
-            if set_filter and 'matched_set_info' in locals():
-                content = [
-                    f"Results for the query '{query}' (filtered by set: {matched_set_info})",
-                ]
-            else:
-                content = [
-                    f"Results for the query '{query}'",
-                ]
-            for entry in entries:
-                content.append(self.format_entry(entry))
-            return content
-
-        async def hybrid_find(
-            ctx: Context,
-            query: Annotated[str, Field(description="What to search for")],
-            collection_name: Annotated[
-                str, Field(description="The collection to search in")
-            ],
-            fusion_method: Annotated[
-                str, Field(description="Fusion method: 'rrf' or 'dbsf'")
-            ] = "rrf",
-            dense_limit: Annotated[
-                int, Field(description="Max results from semantic search")
-            ] = 20,
-            sparse_limit: Annotated[
-                int, Field(description="Max results from keyword search")
-            ] = 20,
-            final_limit: Annotated[
-                int, Field(description="Final number of results after fusion")
-            ] = 10,
-            query_filter: ArbitraryFilter | None = None,
-            set_filter: Annotated[
-                Optional[str], 
-                Field(description="Natural language description of the set to filter by")
-            ] = None,
-        ) -> list[str] | None:
-            """
-            Hybrid search combining semantic similarity and keyword matching.
-            Uses Qdrant's RRF/DBSF fusion for optimal search results.
-
-            :param ctx: The context for the request.
-            :param query: The query to use for the search.
-            :param collection_name: The name of the collection to search in.
-            :param fusion_method: Fusion method - 'rrf' (Reciprocal Rank Fusion) or 'dbsf' (Distribution-Based Score Fusion).
-            :param dense_limit: Maximum results from dense vector search.
-            :param sparse_limit: Maximum results from sparse vector search.
-            :param final_limit: Maximum final results after fusion.
-            :param query_filter: The filter to apply to the query.
-            :param set_filter: Natural language description of the set to filter by.
-            :return: A list of entries found or None.
-            """
-            await ctx.debug(
-                f"Hybrid search for query '{query}' using fusion method '{fusion_method}'"
-            )
-            await ctx.debug(f"Set filter: {set_filter}")
-
-            # Handle set filtering with comprehensive validation and error handling
-            if set_filter:
-                try:
-                    # Validate set_filter input
-                    if not isinstance(set_filter, str):
-                        await ctx.debug(f"Invalid set_filter type: {type(set_filter)}")
-                        return [f"Error: set_filter must be a string, got {type(set_filter).__name__}"]
-                    
-                    set_filter = set_filter.strip()
-                    if not set_filter:
-                        await ctx.debug("Empty set_filter provided")
-                        return ["Error: set_filter cannot be empty"]
-                    
-                    if len(set_filter) > 200:
-                        await ctx.debug(f"Set filter too long: {len(set_filter)} characters")
-                        return ["Error: set_filter cannot exceed 200 characters"]
-                    
-                    # Attempt semantic matching
-                    matched_set_slug = await self.semantic_matcher.match_set(set_filter)
-                    await ctx.debug(f"Matched set: {matched_set_slug}")
-                    
-                    # Store the matched set for inclusion in response
-                    matched_set_info_hybrid = matched_set_slug
-                    
-                    # Create set filter condition using proper Qdrant field condition
-                    set_field_condition = models.FieldCondition(
-                        key="metadata.set",
-                        match=models.MatchValue(value=matched_set_slug)
-                    )
-                    
-                    # Combine with existing filter if present
-                    if query_filter:
-                        # If query_filter is already a models.Filter, extract its conditions
-                        if isinstance(query_filter, models.Filter):
-                            existing_must = query_filter.must or []
-                            existing_must_not = query_filter.must_not or []
-                            existing_should = query_filter.should or []
-                        else:
-                            # If it's a dict, convert it to Filter first to extract conditions
-                            temp_filter = models.Filter(**query_filter)
-                            existing_must = temp_filter.must or []
-                            existing_must_not = temp_filter.must_not or []
-                            existing_should = temp_filter.should or []
-                        
-                        # Create combined filter with set condition added to must
-                        combined_must = [set_field_condition] + existing_must
-                        parsed_query_filter = models.Filter(
-                            must=combined_must,
-                            must_not=existing_must_not,
-                            should=existing_should
-                        )
-                    else:
-                        # Create new filter with just the set condition
-                        parsed_query_filter = models.Filter(must=[set_field_condition])
-                        
-                except SemanticMatchError as e:
-                    await ctx.debug(f"Set matching error: {e}")
-                    # Provide more helpful error messages based on error type
-                    from .semantic_matcher import NoMatchFoundError, AmbiguousMatchError
-                    
-                    if isinstance(e, NoMatchFoundError):
-                        available_sets = self.semantic_matcher.get_available_sets()
-                        if available_sets:
-                            error_msg = f"No matching set found for '{set_filter}'. Available sets: {', '.join(available_sets[:5])}"
-                            if len(available_sets) > 5:
-                                error_msg += f" (and {len(available_sets) - 5} more)"
-                        else:
-                            error_msg = f"No matching set found for '{set_filter}'. No sets are configured."
-                        return [f"Error: {error_msg}"]
-                    elif isinstance(e, AmbiguousMatchError):
-                        return [f"Error: {str(e)}. Please be more specific."]
-                    else:
-                        return [f"Error: Set filtering failed: {str(e)}"]
-                except Exception as e:
-                    await ctx.debug(f"Unexpected error in set filtering: {e}")
-                    return [f"Error: Unexpected error in set filtering: {str(e)}"]
-            else:
-                parsed_query_filter = query_filter
-
-            entries = await self.qdrant_connector.find_hybrid(
-                query,
-                collection_name=collection_name,
-                fusion_method=fusion_method,
-                dense_limit=dense_limit,
-                sparse_limit=sparse_limit,
-                final_limit=final_limit,
-                query_filter=parsed_query_filter,
-            )
-
-            if not entries:
-                return None
-
-            # Build response with set information if applicable
-            if set_filter and 'matched_set_info_hybrid' in locals():
-                content = [
-                    f"Hybrid search results for '{query}' (fusion: {fusion_method}, filtered by set: {matched_set_info_hybrid})",
-                ]
-            else:
-                content = [
-                    f"Hybrid search results for '{query}' (fusion: {fusion_method})",
-                ]
-            for entry in entries:
-                content.append(self.format_entry(entry))
-            return content
-
+        # Define find function conditionally based on semantic matching setting
+        if self.qdrant_settings.enable_semantic_set_matching:
+            async def find(
+                ctx: Context,
+                query: Annotated[str, Field(description="What to search for")],
+                collection_name: Annotated[
+                    str, Field(description="The collection to search in")
+                ],
+                query_filter: ArbitraryFilter | None = None,
+                set_filter: Annotated[
+                    Optional[str], 
+                    Field(description="Natural language description of the set to filter by")
+                ] = None,
+            ) -> list[str] | None:
+                return await self._find_implementation(ctx, query, collection_name, query_filter, set_filter)
+        else:
+            async def find(
+                ctx: Context,
+                query: Annotated[str, Field(description="What to search for")],
+                collection_name: Annotated[
+                    str, Field(description="The collection to search in")
+                ],
+                query_filter: ArbitraryFilter | None = None,
+            ) -> list[str] | None:
+                return await self._find_implementation(ctx, query, collection_name, query_filter, None)
+        # Define hybrid_find function conditionally based on semantic matching setting
+        if self.qdrant_settings.enable_semantic_set_matching:
+            async def hybrid_find(
+                ctx: Context,
+                query: Annotated[str, Field(description="What to search for")],
+                collection_name: Annotated[
+                    str, Field(description="The collection to search in")
+                ],
+                fusion_method: Annotated[
+                    str, Field(description="Fusion method: 'rrf' or 'dbsf'")
+                ] = "rrf",
+                dense_limit: Annotated[
+                    int, Field(description="Max results from semantic search")
+                ] = 20,
+                sparse_limit: Annotated[
+                    int, Field(description="Max results from keyword search")
+                ] = 20,
+                final_limit: Annotated[
+                    int, Field(description="Final number of results after fusion")
+                ] = 10,
+                query_filter: ArbitraryFilter | None = None,
+                set_filter: Annotated[
+                    Optional[str], 
+                    Field(description="Natural language description of the set to filter by")
+                ] = None,
+            ) -> list[str] | None:
+                return await self._hybrid_find_implementation(
+                    ctx, query, collection_name, fusion_method, dense_limit, sparse_limit, final_limit, query_filter, set_filter
+                )
+        else:
+            async def hybrid_find(
+                ctx: Context,
+                query: Annotated[str, Field(description="What to search for")],
+                collection_name: Annotated[
+                    str, Field(description="The collection to search in")
+                ],
+                fusion_method: Annotated[
+                    str, Field(description="Fusion method: 'rrf' or 'dbsf'")
+                ] = "rrf",
+                dense_limit: Annotated[
+                    int, Field(description="Max results from semantic search")
+                ] = 20,
+                sparse_limit: Annotated[
+                    int, Field(description="Max results from keyword search")
+                ] = 20,
+                final_limit: Annotated[
+                    int, Field(description="Final number of results after fusion")
+                ] = 10,
+                query_filter: ArbitraryFilter | None = None,
+            ) -> list[str] | None:
+                return await self._hybrid_find_implementation(
+                    ctx, query, collection_name, fusion_method, dense_limit, sparse_limit, final_limit, query_filter, None
+                )
         find_foo = find
         store_foo = store
         hybrid_find_foo = hybrid_find

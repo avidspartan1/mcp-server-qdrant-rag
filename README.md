@@ -89,7 +89,7 @@ A specialized Model Context Protocol server that provides intelligent document c
      - `query` (string): Query to use for searching
      - `collection_name` (string): Name of the collection to search in. This parameter is only available when no default collection is configured via `COLLECTION_NAME` environment variable. When a default collection is set, this parameter is removed entirely.
      - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
-   - Returns: Information stored in the Qdrant database as separate messages
+   - Returns: Information stored in the Qdrant database as separate messages. When `set_filter` is used, the response includes the matched set name for transparency.
 3. `qdrant_hybrid_find`
    - Advanced hybrid search combining semantic similarity and keyword matching using Qdrant's RRF/DBSF fusion
    - Input:
@@ -101,7 +101,7 @@ A specialized Model Context Protocol server that provides intelligent document c
      - `sparse_limit` (integer, optional): Maximum results from keyword search. Default: 20
      - `final_limit` (integer, optional): Final number of results after fusion. Default: 10
      - `set_filter` (string, optional): Natural language description of the set to filter by. Allows filtering results to specific document sets using semantic matching.
-   - Returns: Fused search results combining both semantic understanding and exact keyword matching
+   - Returns: Fused search results combining both semantic understanding and exact keyword matching. When `set_filter` is used, the response includes the matched set name for transparency.
 
 ## Environment Variables
 

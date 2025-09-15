@@ -319,6 +319,9 @@ class QdrantMCPServer(FastMCP):
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
+                    # Store the matched set for inclusion in response
+                    matched_set_info = matched_set_slug
+                    
                     # Create set filter condition using proper Qdrant field condition
                     set_field_condition = models.FieldCondition(
                         key="metadata.set",
@@ -382,9 +385,16 @@ class QdrantMCPServer(FastMCP):
             )
             if not entries:
                 return None
-            content = [
-                f"Results for the query '{query}'",
-            ]
+            
+            # Build response with set information if applicable
+            if set_filter and 'matched_set_info' in locals():
+                content = [
+                    f"Results for the query '{query}' (filtered by set: {matched_set_info})",
+                ]
+            else:
+                content = [
+                    f"Results for the query '{query}'",
+                ]
             for entry in entries:
                 content.append(self.format_entry(entry))
             return content
@@ -454,6 +464,9 @@ class QdrantMCPServer(FastMCP):
                     matched_set_slug = await self.semantic_matcher.match_set(set_filter)
                     await ctx.debug(f"Matched set: {matched_set_slug}")
                     
+                    # Store the matched set for inclusion in response
+                    matched_set_info_hybrid = matched_set_slug
+                    
                     # Create set filter condition using proper Qdrant field condition
                     set_field_condition = models.FieldCondition(
                         key="metadata.set",
@@ -522,9 +535,15 @@ class QdrantMCPServer(FastMCP):
             if not entries:
                 return None
 
-            content = [
-                f"Hybrid search results for '{query}' (fusion: {fusion_method})",
-            ]
+            # Build response with set information if applicable
+            if set_filter and 'matched_set_info_hybrid' in locals():
+                content = [
+                    f"Hybrid search results for '{query}' (fusion: {fusion_method}, filtered by set: {matched_set_info_hybrid})",
+                ]
+            else:
+                content = [
+                    f"Hybrid search results for '{query}' (fusion: {fusion_method})",
+                ]
             for entry in entries:
                 content.append(self.format_entry(entry))
             return content

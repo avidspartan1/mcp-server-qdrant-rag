@@ -186,6 +186,7 @@ results = await qdrant_find(
     collection_name="my-kb",
     set_filter="backend services"  # Matches "backend_services" set
 )
+# Response includes: "Results for the query 'authentication implementation' (filtered by set: backend_services)"
 
 # Search using aliases
 results = await qdrant_find(
@@ -193,6 +194,7 @@ results = await qdrant_find(
     collection_name="my-kb", 
     set_filter="react components"  # Matches "frontend_components" via alias
 )
+# Response includes: "Results for the query 'button components' (filtered by set: frontend_components)"
 
 # Hybrid search with set filtering
 results = await qdrant_hybrid_find(
@@ -200,7 +202,10 @@ results = await qdrant_hybrid_find(
     collection_name="my-kb",
     set_filter="database"  # Matches "database_schemas" via alias
 )
+# Response includes: "Hybrid search results for 'database migration scripts' (fusion: rrf, filtered by set: database_schemas)"
 ```
+
+**Set Display Feature**: When using `set_filter`, the search results now include the matched set name in the response header, providing transparency about which set was selected by your natural language query.
 
 ## Semantic Matching
 

@@ -17,7 +17,6 @@ A specialized Model Context Protocol server that provides intelligent document c
 
 - **Intelligent Document Chunking**: Automatic splitting of large documents using semantic, sentence, or fixed strategies
 - **Configurable Chunking Parameters**: Customizable chunk sizes, overlap, and splitting strategies
-- **Semantic Metadata Filtering**: Advanced set-based filtering with natural language queries to organize and search document collections by category, project, or type
 - **Enhanced Retrieval Performance**: Optimized for better context retrieval from large documents
 - **Backward Compatibility**: Seamlessly works with existing collections and configurations
 

@@ -15,10 +15,10 @@ A specialized Model Context Protocol server that provides intelligent document c
 
 **Key Enhancements over upstream:**
 
+- **Document Ingest CLI**: CLI tool to ingest documents, code, etc., into the Qdrant knowledgebase
 - **Intelligent Document Chunking**: Automatic splitting of large documents using semantic, sentence, or fixed strategies
 - **Configurable Chunking Parameters**: Customizable chunk sizes, overlap, and splitting strategies
 - **Enhanced Retrieval Performance**: Optimized for better context retrieval from large documents
-- **Backward Compatibility**: Seamlessly works with existing collections and configurations
 
 ## Table of Contents
 

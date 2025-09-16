@@ -39,7 +39,6 @@ A specialized Model Context Protocol server that provides intelligent document c
 - [CLI Tool: qdrant-ingest](#cli-tool-qdrant-ingest)
   - [Basic Usage](#basic-usage)
   - [Advanced Examples](#advanced-examples)
-  - [Document Metadata and Set Filtering](#document-metadata-and-set-filtering)
   - [Supported File Types](#supported-file-types)
   - [Getting Help](#getting-help)
 - [Configuration Examples](#configuration-examples)
@@ -354,26 +353,10 @@ qdrant-ingest list
 qdrant-ingest remove my-docs
 ```
 
-### Document Metadata and Set Filtering
-
-```bash
-# Ingest with document type metadata
-qdrant-ingest /path/to/api-docs --document-type api_docs
-
-# Ingest with set identifier for grouping
-qdrant-ingest /path/to/platform-code --set platform_code
-
-# Combine metadata fields
-qdrant-ingest /path/to/requirements --document-type requirements --set platform_code
-
-# Use custom sets configuration file
-qdrant-ingest /path/to/docs --sets-config /path/to/custom-sets.json --set my_custom_set
-```
-
 ### Supported File Types
 
 The CLI tool automatically processes these file types:
-`.txt`, `.md`, `.py`, `.js`, `.json`, `.yaml`, `.yml`, `.rst`, `.tf`, `.java`, `.sh`, `.go`, `.rb`, `.ts`, `.conf`, `.ini`, `.cfg`, `.toml`, `.xml`, `.html`, `.css`, `.sql`
+`.txt`, `.md`, `.py`, `.js`, `.json`, `.yaml`, `.yml`, `.rst`, `.tf`, `.tftpl`, `.tpl`, `.hcl`, `.java`, `.sh`, `.go`, `.rb`, `.ts`, `.conf`, `.ini`, `.cfg`, `.toml`, `.xml`, `.html`, `.css`, `.sql`
 
 ### Getting Help
 
